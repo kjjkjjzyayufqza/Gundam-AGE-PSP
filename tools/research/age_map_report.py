@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch validation/reporting for AGE PSP map-model exports."""
+"""Map export reporting helpers for AGE PSP asset pipeline outputs."""
 
 from __future__ import annotations
 
@@ -477,75 +477,6 @@ def render_html(report: dict[str, Any]) -> str:
 </body>
 </html>
 """
-
-
-def build_report(
-    inputs: list[Path],
-    out_root: Path,
-    triangulation: str,
-    texture_layout: str,
-    overwrite: bool,
-) -> dict[str, Any]:
-    samples = []
-    for archive_path in inputs:
-        sample_dir = out_root / "samples" / archive_path.stem
-        manifest = export_archive(archive_path, sample_dir, triangulation, texture_layout, overwrite)
-        samples.append(summarize_manifest(manifest, out_root))
-    return {
-        "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(timespec="seconds"),
-        "input_root": str(inputs[0].parent) if inputs else "",
-        "triangulation": triangulation,
-        "texture_layout": texture_layout,
-        "sample_count": len(samples),
-        "samples": samples,
-        "notes": [
-            "This report is intended for map-model conversion checks.",
-            "Use the HTML viewer over local HTTP so model-viewer can load glTF and texture assets.",
-        ],
-    }
-
-
-def command_validate(args: argparse.Namespace) -> int:
-    inputs = [Path(item) for item in args.inputs]
-    out_root = Path(args.out_root)
-    out_root.mkdir(parents=True, exist_ok=True)
-    report = build_report(inputs, out_root, args.triangulation, args.texture_layout, args.overwrite)
-
-    json_path = out_root / "map_validation_report.json"
-    md_path = out_root / "MAP_VALIDATION_REPORT.md"
-    html_path = out_root / "map_validation_viewer.html"
-
-    json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-    md_path.write_text(render_markdown(report), encoding="utf-8")
-    html_path.write_text(render_html(report), encoding="utf-8")
-
-    print(f"Samples: {report['sample_count']}")
-    print(f"JSON: {json_path}")
-    print(f"Markdown: {md_path}")
-    print(f"HTML: {html_path}")
-    return 0
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Batch-run AGE PSP map archive exports and build validation reports.")
-    parser.add_argument("inputs", nargs="+", help="map .xc archives")
-    parser.add_argument("--out-root", required=True, help="root output directory for samples and reports")
-    parser.add_argument("--triangulation", choices=["strip", "list", "points"], default="strip")
-    parser.add_argument("--texture-layout", choices=["psp-swizzled", "tiled", "linear"], default="psp-swizzled")
-    parser.add_argument("--overwrite", action="store_true")
-    parser.set_defaults(func=command_validate)
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
-    args = build_parser().parse_args(argv)
-    return args.func(args)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
 
 
 

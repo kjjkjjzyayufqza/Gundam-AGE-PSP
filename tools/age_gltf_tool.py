@@ -22,6 +22,7 @@ from age_xmpr_tool import (  # noqa: E402
     Vertex,
     decode_mesh,
     iter_prm_inputs,
+    material_name_for_mesh,
     obj_identifier,
     vertex_weight_records,
 )
@@ -213,6 +214,7 @@ def write_gltf(
     path: Path,
     meshes: list[MeshExport],
     material_records: list[dict[str, Any]] | None = None,
+    material_name_overrides: dict[str, str] | None = None,
     mbn_root: Path | None = None,
     mbn_roots: list[Path] | None = None,
 ) -> dict[str, Any]:
@@ -432,7 +434,7 @@ def write_gltf(
 
         primitive: dict[str, Any] = {
             "attributes": attributes,
-            "material": ensure_material(obj_identifier(info.material_name, "default_material")),
+            "material": ensure_material(material_name_for_mesh(info, material_name_overrides)),
             "mode": MODE_POINTS if not faces else MODE_TRIANGLES,
             "extras": {
                 "source": info.source,

@@ -19,6 +19,8 @@ from age_asset_pipeline import (  # noqa: E402
     model_archive_prefix,
     model_node_hashes,
     skeleton_archives_from_survey,
+    source_matches,
+    write_mtl,
 )
 
 
@@ -91,6 +93,68 @@ class CharacterPipelineTests(unittest.TestCase):
             )
 
             self.assertEqual(skeleton_archives_from_survey(path), [Path(r"D:\root\skel.xc")])
+
+    def test_source_matches_accepts_relative_mapping_source(self) -> None:
+        self.assertTrue(source_matches("001.prm", r"out\extracted\001.prm"))
+        self.assertTrue(source_matches("nested/001.prm", r"out\extracted\nested\001.prm"))
+        self.assertFalse(source_matches("002.prm", r"out\extracted\001.prm"))
+
+    def test_write_mtl_adds_mesh_level_texture_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            extracted = root / "extracted"
+            texture = extracted / "047.xi"
+            png = root / "textures" / "047.png"
+            material_manifest = {
+                "root": str(extracted),
+                "materials": [
+                    {
+                        "material_name": "map.sky-",
+                        "texture_name_candidates": [],
+                        "xi_path_by_txp_stem": None,
+                        "texture_image_binding_confidence": "unresolved",
+                    }
+                ],
+                "meshes": [
+                    {
+                        "source": str(extracted / "001.prm"),
+                        "mesh_name": "sky_tm",
+                        "material_name": "map.sky-",
+                    }
+                ],
+                "image_order_candidates": [],
+            }
+            texture_manifest = {"items": [{"source": str(texture), "png": str(png)}]}
+            overrides = {
+                "mesh_textures": [
+                    {
+                        "mesh_name": "sky_tm",
+                        "material_name": "map.sky-",
+                        "source": "001.prm",
+                        "texture": "047.xi",
+                        "confidence": "visual_reviewed_sky",
+                        "reason": "reviewed sky texture",
+                    }
+                ]
+            }
+
+            mtl_path, records, material_overrides = write_mtl(
+                root / "models",
+                "sample",
+                material_manifest,
+                texture_manifest,
+                overrides,
+            )
+
+            override_record = next(item for item in records if item.get("mesh_name") == "sky_tm")
+            self.assertEqual(override_record["map_Kd"], "../textures/047.png")
+            self.assertEqual(override_record["texture_mapping_confidence"], "visual_reviewed_sky")
+            self.assertEqual(override_record["mapping_reason"], "reviewed sky texture")
+            self.assertIn("map.sky-__sky_tm", mtl_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                material_overrides[str(extracted / "001.prm").replace("\\", "/").lower()],
+                "map.sky-__sky_tm",
+            )
 
 
 if __name__ == "__main__":

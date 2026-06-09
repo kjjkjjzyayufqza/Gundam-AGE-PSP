@@ -72,22 +72,6 @@ def command_character(args: argparse.Namespace) -> int:
     return age_asset_pipeline.main(argv)
 
 
-def command_map_validate(args: argparse.Namespace) -> int:
-    from research import age_map_validation
-
-    argv = [
-        *args.inputs,
-        "--out-root",
-        args.out_root,
-        "--triangulation",
-        args.triangulation,
-        "--texture-layout",
-        args.texture_layout,
-    ]
-    append_bool(argv, "--overwrite", args.overwrite)
-    return age_map_validation.main(argv)
-
-
 def command_map_survey(args: argparse.Namespace) -> int:
     from research import age_map_survey
 
@@ -155,16 +139,8 @@ def build_parser() -> argparse.ArgumentParser:
     character.add_argument("--animation-policy", choices=["none", "best", "all"], default="none")
     character.set_defaults(func=command_character)
 
-    map_parser = subparsers.add_parser("map", help="map validation/survey commands")
+    map_parser = subparsers.add_parser("map", help="map survey commands")
     map_sub = map_parser.add_subparsers(dest="map_command", required=True)
-
-    validate = map_sub.add_parser("validate", help="export selected map archives and build HTML/MD reports")
-    validate.add_argument("inputs", nargs="+", help="map .xc archives")
-    validate.add_argument("--out-root", required=True)
-    validate.add_argument("--triangulation", choices=["strip", "list", "points"], default="strip")
-    validate.add_argument("--texture-layout", choices=["psp-swizzled", "tiled", "linear"], default="psp-swizzled")
-    validate.add_argument("--overwrite", action="store_true")
-    validate.set_defaults(func=command_map_validate)
 
     survey = map_sub.add_parser("survey", help="run large-sample map survey")
     survey.add_argument("--input-root", required=True)

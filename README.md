@@ -116,16 +116,22 @@ python .\tools\age_start.py asset `
   --overwrite
 ```
 
-Validate selected large maps:
+For map-model checks, use the same `asset` output directory instead of creating
+a parallel `map_validation` sample tree. The asset manifest records texture,
+material, OBJ, and glTF paths in one place.
 
 ```powershell
-python .\tools\age_start.py map validate `
-  "<PSP_RESOURCE_ROOT>\map\e1101.xc" `
-  "<PSP_RESOURCE_ROOT>\map\b3205.xc" `
-  "<PSP_RESOURCE_ROOT>\map\b0101.xc" `
-  --out-root .\outputs\map_validation\large_manual `
+python .\tools\age_start.py asset `
+  "<PSP_RESOURCE_ROOT>\map\e3108.xc" `
+  --out-dir .\outputs\pipeline\e3108 `
+  --name e3108 `
   --overwrite
 ```
+
+When an archive needs hand-reviewed mesh-to-texture assignments, record them in
+`tools/data/mesh_texture_mappings.json`. The asset pipeline applies that file
+before writing MTL/OBJ/glTF, so a shared source material can be split per mesh
+without adding a second export pipeline.
 
 ## One-Command Tool: `age_start.py`
 
@@ -138,7 +144,6 @@ age_start.py
   xpck extract  -> age_xpck_tool
   asset         -> age_asset_pipeline
   character     -> age_asset_pipeline with animation opt-in
-  map validate  -> research.age_map_validation
   map survey    -> research.age_map_survey
   index         -> age_asset_index
 ```
@@ -216,7 +221,7 @@ Gundam-AGE-PSP/
     age_asset_pipeline.py
     age_asset_index.py
     research/
-      age_map_validation.py
+      age_map_report.py
       age_map_survey.py
       age_model_survey.py
       age_static_model_catalog.py

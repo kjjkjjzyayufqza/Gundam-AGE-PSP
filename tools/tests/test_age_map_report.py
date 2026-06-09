@@ -8,10 +8,10 @@ from pathlib import Path
 TOOLS_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS_DIR))
 
-from research.age_map_validation import render_html, render_markdown, summarize_manifest  # noqa: E402
+from research.age_map_report import render_html, render_markdown, summarize_manifest  # noqa: E402
 
 
-class AgeMapValidationTests(unittest.TestCase):
+class AgeMapReportTests(unittest.TestCase):
     def test_summarize_manifest_counts_resolved_materials(self) -> None:
         report_root = Path(r"E:\report")
         manifest = {

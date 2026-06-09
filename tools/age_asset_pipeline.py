@@ -42,6 +42,7 @@ from age_xpck_tool import XpckError, extract_archive  # noqa: E402
 MODEL_ARCHIVE_RE = re.compile(r"^(?P<prefix>.+)_p\d+$", re.IGNORECASE)
 TOOLS_DIR = Path(__file__).resolve().parent
 WORKSPACE_DIR = TOOLS_DIR.parent
+MESH_TEXTURE_MAPPINGS = TOOLS_DIR / "data" / "mesh_texture_mappings.json"
 ANIMATION_PROBE_PROJECT = TOOLS_DIR / "StudioElevenAnimationProbe" / "StudioElevenAnimationProbe.csproj"
 ANIMATION_PROBE_DLL = (
     TOOLS_DIR / "StudioElevenAnimationProbe" / "bin" / "Release" / "net9.0" / "StudioElevenAnimationProbe.dll"
@@ -424,6 +425,7 @@ def export_models(
     skip_degenerate_faces: bool,
     mtllib: str | None,
     material_records: list[dict] | None = None,
+    material_name_overrides: dict[str, str] | None = None,
     mbn_roots: list[Path] | None = None,
 ) -> dict:
     meshes = []
@@ -442,10 +444,16 @@ def export_models(
     weights_summary = None
     gltf_summary = None
     if meshes:
-        write_obj(obj_path, meshes, mtllib)
+        write_obj(obj_path, meshes, mtllib, material_name_overrides)
         weights_manifest = write_weight_manifest(weights_manifest_path, meshes, obj_path)
         weights_summary = weight_manifest_summary(weights_manifest, weights_manifest_path)
-        gltf_summary = write_gltf(gltf_path, meshes, material_records, mbn_roots=mbn_roots or [extracted_dir])
+        gltf_summary = write_gltf(
+            gltf_path,
+            meshes,
+            material_records,
+            material_name_overrides,
+            mbn_roots=mbn_roots or [extracted_dir],
+        )
 
     manifest = {
         "obj": str(obj_path) if meshes else None,
@@ -476,6 +484,39 @@ def normalized_path_key(path: str | Path | None) -> str | None:
     return str(Path(path)).replace("\\", "/").lower()
 
 
+def archive_override_keys(args: argparse.Namespace, extracted_dir: Path) -> list[str]:
+    keys = []
+    for value in (getattr(args, "name", None), getattr(args, "input", None), extracted_dir.name):
+        if not value:
+            continue
+        stem = Path(str(value)).stem
+        if stem and stem not in keys:
+            keys.append(stem)
+    return keys
+
+
+def mapping_entries(data: dict) -> dict:
+    return data.get("archives") or data
+
+
+def load_mesh_texture_mapping(args: argparse.Namespace, extracted_dir: Path) -> dict:
+    if not MESH_TEXTURE_MAPPINGS.exists():
+        return {}
+    data = json.loads(MESH_TEXTURE_MAPPINGS.read_text(encoding="utf-8"))
+    archives = mapping_entries(data)
+    for key in archive_override_keys(args, extracted_dir):
+        if key in archives:
+            mapping = dict(archives[key])
+            mapping["archive_key"] = key
+            mapping["mapping_file"] = str(MESH_TEXTURE_MAPPINGS)
+            if data.get("schema"):
+                mapping["schema"] = data["schema"]
+            if data.get("notes"):
+                mapping["mapping_notes"] = data["notes"]
+            return mapping
+    return {}
+
+
 def export_materials(extracted_dir: Path, material_dir: Path) -> dict:
     material_dir.mkdir(parents=True, exist_ok=True)
     manifest = build_material_manifest(extracted_dir)
@@ -491,9 +532,47 @@ def export_materials(extracted_dir: Path, material_dir: Path) -> dict:
     }
 
 
-def write_mtl(model_dir: Path, name: str, material_manifest: dict, texture_manifest: dict | None) -> tuple[Path, list[dict]]:
+def source_matches(mapping_source: str | None, mesh_source: str | None) -> bool:
+    mapping_key = normalized_path_key(mapping_source)
+    if not mapping_key:
+        return True
+    mesh_key = normalized_path_key(mesh_source)
+    if not mesh_key:
+        return False
+    return mesh_key == mapping_key or mesh_key.endswith("/" + mapping_key) or Path(mesh_key).name == Path(mapping_key).name
+
+
+def matching_mesh_texture_entries(material_manifest: dict, mesh_texture_mapping: dict) -> list[tuple[dict, dict]]:
+    requested = mesh_texture_mapping.get("mesh_textures") or []
+    if not requested:
+        return []
+
+    matches = []
+    for entry in requested:
+        entry_mesh = entry.get("mesh_name")
+        entry_material = entry.get("material_name")
+        entry_source = entry.get("source")
+        for mesh in material_manifest.get("meshes", []):
+            if entry_source and not source_matches(entry_source, mesh.get("source")):
+                continue
+            if entry_mesh and str(mesh.get("mesh_name") or "") != str(entry_mesh):
+                continue
+            if entry_material and str(mesh.get("material_name") or "") != str(entry_material):
+                continue
+            matches.append((mesh, entry))
+    return matches
+
+
+def write_mtl(
+    model_dir: Path,
+    name: str,
+    material_manifest: dict,
+    texture_manifest: dict | None,
+    mesh_texture_mapping: dict | None = None,
+) -> tuple[Path, list[dict], dict[str, str]]:
     model_dir.mkdir(parents=True, exist_ok=True)
     mtl_path = model_dir / f"{name}.mtl"
+    extracted_dir = Path(material_manifest.get("root") or ".")
     texture_by_source = {}
     if texture_manifest:
         for item in texture_manifest.get("items", []):
@@ -508,25 +587,38 @@ def write_mtl(model_dir: Path, name: str, material_manifest: dict, texture_manif
         "# Experimental MTL generated from Gundam AGE PSP material binding evidence",
         "# TXP owner bindings use CRC32-confirmed CHRP00 strings.",
         "# Texture image mapping prefers direct TXP/XI numbered-stem matches, then falls back to resource order.",
+        "# Mesh texture mappings are explicit model-to-texture assignments recorded for textured review.",
     ]
     records = []
-    for material in material_manifest.get("materials", []):
-        material_name = obj_identifier(material.get("material_name", ""), "default_material")
-        texture_name = (material.get("texture_name_candidates") or [None])[0]
-        xi_path = material.get("xi_path_by_txp_stem")
-        texture_mapping_confidence = material.get("texture_image_binding_confidence") or "unresolved"
-        if not xi_path and texture_name:
-            xi_path = xi_by_texture_name.get(texture_name)
-            texture_mapping_confidence = "resource_order_heuristic" if xi_path else "unresolved"
+    matched_overrides = matching_mesh_texture_entries(material_manifest, mesh_texture_mapping or {})
+    overridden_sources = {
+        key
+        for mesh, _override in matched_overrides
+        for key in [normalized_path_key(mesh.get("source"))]
+        if key
+    }
+    meshes_by_material: dict[str, list[dict]] = {}
+    for mesh in material_manifest.get("meshes", []):
+        meshes_by_material.setdefault(str(mesh.get("material_name") or ""), []).append(mesh)
+
+    def append_record(
+        raw_material_name: str,
+        obj_material_name: str,
+        texture_name: str | None,
+        xi_path: str | None,
+        texture_mapping_confidence: str,
+        extra: dict | None = None,
+    ) -> None:
         png_path = texture_by_source.get(normalized_path_key(xi_path))
         rel_png = None
+        confidence = texture_mapping_confidence
         if png_path:
             rel_png = os.path.relpath(Path(png_path), model_dir).replace("\\", "/")
         else:
-            texture_mapping_confidence = "unresolved"
+            confidence = "unresolved"
 
         lines.append("")
-        lines.append(f"newmtl {material_name}")
+        lines.append(f"newmtl {obj_material_name}")
         lines.append("Kd 1.000000 1.000000 1.000000")
         lines.append("Ka 0.000000 0.000000 0.000000")
         lines.append("Ks 0.000000 0.000000 0.000000")
@@ -536,20 +628,70 @@ def write_mtl(model_dir: Path, name: str, material_manifest: dict, texture_manif
         else:
             lines.append("# map_Kd unresolved")
 
-        records.append(
-            {
-                "material_name": material.get("material_name"),
-                "obj_material_name": material_name,
-                "texture_name_candidate": texture_name,
-                "xi_path": xi_path,
-                "png_path": png_path,
-                "map_Kd": rel_png,
-                "texture_mapping_confidence": texture_mapping_confidence,
-            }
+        record = {
+            "material_name": raw_material_name,
+            "obj_material_name": obj_material_name,
+            "texture_name_candidate": texture_name,
+            "xi_path": xi_path,
+            "png_path": png_path,
+            "map_Kd": rel_png,
+            "texture_mapping_confidence": confidence,
+        }
+        if extra:
+            record.update(extra)
+        records.append(record)
+
+    for material in material_manifest.get("materials", []):
+        raw_material_name = str(material.get("material_name") or "")
+        material_meshes = meshes_by_material.get(raw_material_name, [])
+        if material_meshes and all(normalized_path_key(mesh.get("source")) in overridden_sources for mesh in material_meshes):
+            continue
+        material_name = obj_identifier(material.get("material_name", ""), "default_material")
+        texture_name = (material.get("texture_name_candidates") or [None])[0]
+        xi_path = material.get("xi_path_by_txp_stem")
+        texture_mapping_confidence = material.get("texture_image_binding_confidence") or "unresolved"
+        if not xi_path and texture_name:
+            xi_path = xi_by_texture_name.get(texture_name)
+            texture_mapping_confidence = "resource_order_heuristic" if xi_path else "unresolved"
+        append_record(
+            raw_material_name=material.get("material_name"),
+            obj_material_name=material_name,
+            texture_name=texture_name,
+            xi_path=xi_path,
+            texture_mapping_confidence=texture_mapping_confidence,
         )
 
+    material_name_overrides: dict[str, str] = {}
+    for mesh, override in matched_overrides:
+        raw_material_name = str(mesh.get("material_name") or "")
+        mesh_name = str(mesh.get("mesh_name") or "")
+        obj_material_name = obj_identifier(
+            str(override.get("obj_material_name") or f"{raw_material_name}__{mesh_name}"),
+            "default_material",
+        )
+        texture_value = override.get("texture")
+        xi_path = str(extracted_dir / texture_value) if texture_value else None
+        append_record(
+            raw_material_name=raw_material_name,
+            obj_material_name=obj_material_name,
+            texture_name=override.get("texture_name") or texture_value,
+            xi_path=xi_path,
+            texture_mapping_confidence=str(override.get("confidence") or "mesh_texture_mapping"),
+            extra={
+                "mesh_name": mesh_name,
+                "source": mesh.get("source"),
+                "mesh_texture_mapping": True,
+                "mapping_reason": override.get("reason"),
+                "mapping_file": (mesh_texture_mapping or {}).get("mapping_file"),
+            },
+        )
+        source_key = normalized_path_key(mesh.get("source"))
+        if source_key:
+            material_name_overrides[source_key] = obj_material_name
+        material_name_overrides[f"mesh:{mesh_name}|material:{raw_material_name}"] = obj_material_name
+
     mtl_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return mtl_path, records
+    return mtl_path, records, material_name_overrides
 
 
 def run_pipeline(args: argparse.Namespace, extracted_dir: Path, source_kind: str) -> dict:
@@ -562,6 +704,7 @@ def run_pipeline(args: argparse.Namespace, extracted_dir: Path, source_kind: str
 
     materials = None
     material_manifest = None
+    mesh_texture_mapping = load_mesh_texture_mapping(args, extracted_dir)
     if not args.skip_materials:
         material_manifest = build_material_manifest(extracted_dir)
         material_dir = out_dir / "materials"
@@ -576,6 +719,8 @@ def run_pipeline(args: argparse.Namespace, extracted_dir: Path, source_kind: str
             "image_order_candidates": material_manifest["image_order_candidates"],
             "notes": material_manifest["notes"],
         }
+        if mesh_texture_mapping:
+            materials["mesh_texture_mapping"] = mesh_texture_mapping
 
     name = args.name or extracted_dir.name
     model_dir = out_dir / "models"
@@ -599,10 +744,18 @@ def run_pipeline(args: argparse.Namespace, extracted_dir: Path, source_kind: str
             )
     mtl_path = None
     mtl_records = []
+    material_name_overrides = {}
     if material_manifest and textures and not args.skip_models:
-        mtl_path, mtl_records = write_mtl(model_dir, name, material_manifest, textures)
+        mtl_path, mtl_records, material_name_overrides = write_mtl(
+            model_dir,
+            name,
+            material_manifest,
+            textures,
+            mesh_texture_mapping,
+        )
         materials["mtl"] = str(mtl_path)  # type: ignore[index]
         materials["mtl_records"] = mtl_records  # type: ignore[index]
+        materials["material_name_overrides"] = material_name_overrides  # type: ignore[index]
 
     models = None
     if not args.skip_models:
@@ -614,6 +767,7 @@ def run_pipeline(args: argparse.Namespace, extracted_dir: Path, source_kind: str
             not args.keep_degenerate_faces,
             str(mtl_path.name) if mtl_path else None,
             mtl_records,
+            material_name_overrides,
             mbn_roots,
         )
 

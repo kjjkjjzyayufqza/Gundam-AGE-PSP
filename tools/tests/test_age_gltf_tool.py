@@ -113,6 +113,34 @@ class AgeGltfToolTests(unittest.TestCase):
             self.assertEqual(document["nodes"][-1]["skin"], 0)
             self.assertEqual(document["skins"][0]["extras"]["node_hashes"], ["AAAABBBB", "CCCCDDDD"])
 
+    def test_write_gltf_uses_mesh_material_override(self) -> None:
+        vertices = [
+            make_vertex((0, 0, 0, 0, 0, 0, 0, 0), (0.0, 0.0, 0.0)),
+            make_vertex((0, 0, 0, 0, 0, 0, 0, 0), (1.0, 0.0, 0.0)),
+            make_vertex((0, 0, 0, 0, 0, 0, 0, 0), (0.0, 1.0, 0.0)),
+        ]
+        material_records = [
+            {
+                "obj_material_name": "DefaultLib.sample__sample_mesh",
+                "map_Kd": "../textures/047.png",
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            gltf_path = Path(temp_dir) / "sample.gltf"
+            summary = write_gltf(
+                gltf_path,
+                [(make_mesh_info(), vertices, [(1, 2, 3)])],
+                material_records,
+                {"sample.prm": "DefaultLib.sample__sample_mesh"},
+            )
+            document = json.loads(gltf_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(summary["texture_count"], 1)
+            self.assertEqual(document["materials"][0]["name"], "DefaultLib.sample__sample_mesh")
+            self.assertEqual(document["images"][0]["uri"], "../textures/047.png")
+            self.assertEqual(document["meshes"][0]["primitives"][0]["material"], 0)
+
     def test_write_gltf_uses_mbn_bind_nodes_when_available(self) -> None:
         vertices = [
             make_vertex((128, 0, 0, 0, 0, 0, 0, 0), (0.0, 0.0, 0.0)),

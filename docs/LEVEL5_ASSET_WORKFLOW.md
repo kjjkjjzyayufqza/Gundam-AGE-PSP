@@ -45,7 +45,7 @@ This is a thin wrapper. Real implementation remains in focused modules:
 
 - `tools/age_xpck_tool.py`
 - `tools/age_asset_pipeline.py`
-- `tools/research/age_map_validation.py`
+- `tools/research/age_map_report.py`
 - `tools/research/age_map_survey.py`
 - `tools/age_imgp_tool.py`
 - `tools/age_xmpr_tool.py`
@@ -64,10 +64,10 @@ Export one archive to textures, OBJ, MTL, glTF, and manifests:
 python .\tools\age_start.py asset "<PSP_RESOURCE_ROOT>\map\e1101.xc" --out-dir .\outputs\pipeline\e1101 --name e1101 --overwrite
 ```
 
-Export and compare selected maps:
+Export and compare selected maps with normal asset output:
 
 ```powershell
-python .\tools\age_start.py map validate "<PSP_RESOURCE_ROOT>\map\e1101.xc" "<PSP_RESOURCE_ROOT>\map\b3205.xc" "<PSP_RESOURCE_ROOT>\map\b0101.xc" --out-root .\outputs\map_validation\large_manual --overwrite
+python .\tools\age_start.py asset "<PSP_RESOURCE_ROOT>\map\e3108.xc" --out-dir .\outputs\pipeline\e3108 --name e3108 --overwrite
 ```
 
 Run large map survey:
@@ -132,8 +132,8 @@ Manual decompression entry:
 python .\tools\age_xpck_tool.py decompress-l5 .\some_payload.bin --out .\payload.dec.bin --overwrite
 ```
 
-Normal users should not need manual decompression. `age_start.py asset` and
-`age_start.py map validate` call the needed decode paths.
+Normal users should not need manual decompression. `age_start.py asset` calls
+the needed decode paths.
 
 ## Texture Decode
 
@@ -219,7 +219,6 @@ Recommended generated-output layout:
 |---|---|
 | `outputs/previews/` | PNG screenshots and quick visual previews |
 | `outputs/pipeline/<sample>/` | One archive full export |
-| `outputs/map_validation/<batch>/` | Kept map samples plus HTML/MD/JSON reports |
 | `outputs/map_survey/<batch>/` | Large survey JSON/MD; use `--cleanup-samples` to avoid retaining every sample |
 | `outputs/manifests/` | Stable JSON manifests from probes/catalogs |
 | `outputs/tmp/` | Disposable experiments |

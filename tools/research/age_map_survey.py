@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from research.age_map_validation import export_archive, summarize_manifest  # noqa: E402
+from research.age_map_report import export_archive, summarize_manifest  # noqa: E402
 
 
 def collect_inputs(input_root: Path, include: list[str], exclude: list[str]) -> list[Path]:

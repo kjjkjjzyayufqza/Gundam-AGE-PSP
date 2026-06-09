@@ -1,0 +1,582 @@
+{
+  "schema": "age_mesh_texture_mapping_v1",
+  "notes": [
+    "Canonical, human-reviewable mesh-to-texture assignments for archives where material/TXP inference is not sufficient.",
+    "The asset pipeline applies this file before writing OBJ/MTL/glTF so repeated raw materials can be split per mesh.",
+    "Entries with visual_reviewed_* were chosen from rendered mesh and candidate-texture comparison sheets under outputs/pipeline/e3108."
+  ],
+  "archives": {
+    "e3108": {
+      "source": "psp/map/e3108.xc",
+      "mesh_textures": [
+        {
+          "mesh_index": 0,
+          "source": "000.prm",
+          "mesh_name": "a_fance",
+          "material_name": "e3108.e3108b05-a-a-",
+          "texture": "004.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 1,
+          "source": "001.prm",
+          "mesh_name": "sky_tm",
+          "material_name": "e3108.e3108s01-tm-",
+          "texture": "047.xi",
+          "confidence": "visual_reviewed_sky",
+          "reason": "Only sky image; TXP tail/resource-order fallback can bind this material to a building texture."
+        },
+        {
+          "mesh_index": 2,
+          "source": "002.prm",
+          "mesh_name": "kaidan",
+          "material_name": "e3108.e3108g05-",
+          "texture": "002.xi",
+          "confidence": "visual_reviewed_stairs",
+          "reason": "Stair geometry uses the light wall/stair atlas."
+        },
+        {
+          "mesh_index": 3,
+          "source": "003.prm",
+          "mesh_name": "stairs1",
+          "material_name": "e3108.e3108g05-",
+          "texture": "002.xi",
+          "confidence": "visual_reviewed_stairs",
+          "reason": "Stair geometry uses the light wall/stair atlas."
+        },
+        {
+          "mesh_index": 4,
+          "source": "004.prm",
+          "mesh_name": "gd",
+          "material_name": "e3108.e3108g02-",
+          "texture": "046.xi",
+          "confidence": "visual_reviewed_ground_tile",
+          "reason": "Large ground mesh uses the repeated pavement tile."
+        },
+        {
+          "mesh_index": 5,
+          "source": "005.prm",
+          "mesh_name": "gd01",
+          "material_name": "e3108.e3108g03-",
+          "texture": "046.xi",
+          "confidence": "visual_reviewed_ground_tile",
+          "reason": "Large ground mesh was previously bound to sky/tail texture; pavement tile matches geometry."
+        },
+        {
+          "mesh_index": 6,
+          "source": "006.prm",
+          "mesh_name": "gd02",
+          "material_name": "e3108.e3108g01-",
+          "texture": "046.xi",
+          "confidence": "visual_reviewed_ground_tile",
+          "reason": "Large raised ground mesh must use the same repeated pavement tile, not the mask-like 045 image."
+        },
+        {
+          "mesh_index": 7,
+          "source": "007.prm",
+          "mesh_name": "block",
+          "material_name": "e3108.e3108b33-",
+          "texture": "034.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 8,
+          "source": "008.prm",
+          "mesh_name": "a_shadow1",
+          "material_name": "e3108.e3108b36-a-a-",
+          "texture": "037.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 9,
+          "source": "009.prm",
+          "mesh_name": "top_out",
+          "material_name": "e3108.e3108b33-",
+          "texture": "034.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 10,
+          "source": "010.prm",
+          "mesh_name": "top_out01",
+          "material_name": "e3108.e3108b03-",
+          "texture": "002.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 11,
+          "source": "011.prm",
+          "mesh_name": "top_out02",
+          "material_name": "e3108.e3108b06-",
+          "texture": "006.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 12,
+          "source": "012.prm",
+          "mesh_name": "top_out03",
+          "material_name": "e3108.e3108b07-",
+          "texture": "007.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 13,
+          "source": "013.prm",
+          "mesh_name": "top_out04",
+          "material_name": "e3108.e3108b35-",
+          "texture": "036.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 14,
+          "source": "014.prm",
+          "mesh_name": "dai",
+          "material_name": "e3108.e3108b32-",
+          "texture": "033.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 15,
+          "source": "015.prm",
+          "mesh_name": "kabe_out1",
+          "material_name": "e3108.e3108b02-",
+          "texture": "001.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 16,
+          "source": "016.prm",
+          "mesh_name": "kabe_out101",
+          "material_name": "e3108.e3108b01-",
+          "texture": "000.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 17,
+          "source": "017.prm",
+          "mesh_name": "kabe_out102",
+          "material_name": "e3108.e3108b04-",
+          "texture": "003.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 18,
+          "source": "018.prm",
+          "mesh_name": "kabe_out103",
+          "material_name": "e3108.e3108b03-",
+          "texture": "002.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 19,
+          "source": "019.prm",
+          "mesh_name": "kabe_out104",
+          "material_name": "e3108.e3108b37-",
+          "texture": "039.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 20,
+          "source": "020.prm",
+          "mesh_name": "kabe_out105",
+          "material_name": "e3108.e3108b34-",
+          "texture": "035.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 21,
+          "source": "021.prm",
+          "mesh_name": "kabe_out106",
+          "material_name": "e3108.e3108b33-",
+          "texture": "034.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 22,
+          "source": "022.prm",
+          "mesh_name": "a_shadow",
+          "material_name": "e3108.e3108g04-a-z0_a-",
+          "texture": "017.xi",
+          "confidence": "mesh_name_resource_order_candidate",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 23,
+          "source": "023.prm",
+          "mesh_name": "a_shadow01",
+          "material_name": "e3108.e3108b36-a-a-",
+          "texture": "037.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 24,
+          "source": "024.prm",
+          "mesh_name": "a_gr",
+          "material_name": "e3108.e3108b36-a-aof35-",
+          "texture": "038.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 25,
+          "source": "025.prm",
+          "mesh_name": "a_gr01",
+          "material_name": "e3108.e3108b05-a-aof35-",
+          "texture": "005.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 26,
+          "source": "026.prm",
+          "mesh_name": "chara",
+          "material_name": "e3108.e3108b27-",
+          "texture": "024.xi",
+          "confidence": "user_reviewed_character_mapping",
+          "reason": "User-provided visual correction: chara should use tex 024."
+        },
+        {
+          "mesh_index": 27,
+          "source": "027.prm",
+          "mesh_name": "chara01",
+          "material_name": "e3108.e3108b25-",
+          "texture": "026.xi",
+          "confidence": "user_reviewed_character_mapping",
+          "reason": "User-provided visual correction: chara01 should use tex 026."
+        },
+        {
+          "mesh_index": 28,
+          "source": "028.prm",
+          "mesh_name": "chara02",
+          "material_name": "e3108.e3108b26-",
+          "texture": "025.xi",
+          "confidence": "user_reviewed_character_mapping",
+          "reason": "User-provided visual correction: chara02 should use tex 025."
+        },
+        {
+          "mesh_index": 29,
+          "source": "029.prm",
+          "mesh_name": "d",
+          "material_name": "e3108.e3108b26-",
+          "texture": "037.xi",
+          "confidence": "user_tentative_character_mapping",
+          "reason": "User-provided tentative correction: d may use tex 037."
+        },
+        {
+          "mesh_index": 30,
+          "source": "030.prm",
+          "mesh_name": "megane",
+          "material_name": "e3108.e3108b26-",
+          "texture": "027.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 31,
+          "source": "031.prm",
+          "mesh_name": "a_tesuri",
+          "material_name": "e3108.e3108b17-a-aof35-",
+          "texture": "019.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 32,
+          "source": "032.prm",
+          "mesh_name": "door",
+          "material_name": "e3108.e3108b24-",
+          "texture": "026.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 33,
+          "source": "033.prm",
+          "mesh_name": "kabe_oku",
+          "material_name": "e3108.e3108b22-",
+          "texture": "024.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 34,
+          "source": "034.prm",
+          "mesh_name": "a_hansha",
+          "material_name": "e3108.e3108b11-a-",
+          "texture": "013.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 35,
+          "source": "035.prm",
+          "mesh_name": "a_hikari1",
+          "material_name": "e3108.e3108b19-a-add-",
+          "texture": "021.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 36,
+          "source": "036.prm",
+          "mesh_name": "hasira",
+          "material_name": "e3108.e3108b15-",
+          "texture": "017.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 37,
+          "source": "037.prm",
+          "mesh_name": "hasira01",
+          "material_name": "e3108.e3108b20-",
+          "texture": "022.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 38,
+          "source": "038.prm",
+          "mesh_name": "hasira02",
+          "material_name": "e3108.e3108b21-",
+          "texture": "023.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 39,
+          "source": "039.prm",
+          "mesh_name": "a_case",
+          "material_name": "e3108.e3108b13-a-",
+          "texture": "015.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 40,
+          "source": "040.prm",
+          "mesh_name": "a_hikari",
+          "material_name": "e3108.e3108b10-add-",
+          "texture": "011.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 41,
+          "source": "041.prm",
+          "mesh_name": "a_isi",
+          "material_name": "e3108.e3108b18-a-",
+          "texture": "020.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 42,
+          "source": "042.prm",
+          "mesh_name": "isi",
+          "material_name": "e3108.e3108b12-",
+          "texture": "014.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 43,
+          "source": "043.prm",
+          "mesh_name": "mo_tm",
+          "material_name": "e3108.e3108e01-tm-add-",
+          "texture": "040.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 44,
+          "source": "044.prm",
+          "mesh_name": "kabe",
+          "material_name": "e3108.e3108b10-",
+          "texture": "010.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 45,
+          "source": "045.prm",
+          "mesh_name": "kabe01",
+          "material_name": "e3108.e3108b14-",
+          "texture": "016.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 46,
+          "source": "046.prm",
+          "mesh_name": "kabe02",
+          "material_name": "e3108.e3108b22-",
+          "texture": "024.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 47,
+          "source": "047.prm",
+          "mesh_name": "kabe03",
+          "material_name": "e3108.e3108b21-",
+          "texture": "023.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 48,
+          "source": "048.prm",
+          "mesh_name": "kabe04",
+          "material_name": "e3108.e3108b09-",
+          "texture": "009.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 49,
+          "source": "049.prm",
+          "mesh_name": "kabe05",
+          "material_name": "e3108.e3108b08-",
+          "texture": "008.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 50,
+          "source": "050.prm",
+          "mesh_name": "top_in",
+          "material_name": "e3108.e3108b10-",
+          "texture": "010.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 51,
+          "source": "051.prm",
+          "mesh_name": "top_in01",
+          "material_name": "e3108.e3108b16-",
+          "texture": "018.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 52,
+          "source": "052.prm",
+          "mesh_name": "top_in02",
+          "material_name": "e3108.e3108b23-",
+          "texture": "025.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 53,
+          "source": "053.prm",
+          "mesh_name": "monitor",
+          "material_name": "e3108.e3108b11-",
+          "texture": "012.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 54,
+          "source": "054.prm",
+          "mesh_name": "monitor01",
+          "material_name": "e3108.e3108e04-",
+          "texture": "043.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 55,
+          "source": "055.prm",
+          "mesh_name": "monitor02",
+          "material_name": "e3108.e3108e03-",
+          "texture": "042.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 56,
+          "source": "056.prm",
+          "mesh_name": "monitor03",
+          "material_name": "e3108.e3108e02-",
+          "texture": "041.xi",
+          "confidence": "txp_stem_xi_match",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        },
+        {
+          "mesh_index": 57,
+          "source": "057.prm",
+          "mesh_name": "g",
+          "material_name": "e3108.e3108b31-",
+          "texture": "030.xi",
+          "confidence": "visual_reviewed_mecha_atlas",
+          "reason": "Candidate render shows current wall texture 032 is wrong; 030 atlas maps the lower-body mecha UVs coherently."
+        },
+        {
+          "mesh_index": 58,
+          "source": "058.prm",
+          "mesh_name": "g01",
+          "material_name": "e3108.e3108b29-",
+          "texture": "028.xi",
+          "confidence": "user_reviewed_mecha_mapping",
+          "reason": "User-provided visual correction: g01 should use tex 028."
+        },
+        {
+          "mesh_index": 59,
+          "source": "059.prm",
+          "mesh_name": "g02",
+          "material_name": "e3108.e3108b28-",
+          "texture": "027.xi",
+          "confidence": "user_reviewed_mecha_mapping",
+          "reason": "User-provided visual correction: g02 should use tex 027."
+        },
+        {
+          "mesh_index": 60,
+          "source": "060.prm",
+          "mesh_name": "g03",
+          "material_name": "e3108.e3108b30-",
+          "texture": "030.xi",
+          "confidence": "visual_reviewed_mecha_atlas",
+          "reason": "Candidate render shows current wall texture 031 is wrong; 030 atlas maps the limb/mecha UVs coherently."
+        },
+        {
+          "mesh_index": 61,
+          "source": "061.prm",
+          "mesh_name": "a_hilight_tm",
+          "material_name": "e3108.e3108e05-tm-add-",
+          "texture": "030.xi",
+          "confidence": "visual_reviewed_mecha_atlas",
+          "reason": "Candidate render shows current floor tile 044 is wrong for the humanoid/mecha overlay geometry; 030 follows the same mecha atlas."
+        },
+        {
+          "mesh_index": 62,
+          "source": "062.prm",
+          "mesh_name": "col_01",
+          "material_name": "cl.__a01-m02-",
+          "texture": "033.xi",
+          "confidence": "mesh_name_resource_order_candidate",
+          "reason": "Inherited from CRC-confirmed TXP owner and current texture binding."
+        }
+      ]
+    }
+  }
+}

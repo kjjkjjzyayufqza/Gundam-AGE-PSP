@@ -539,10 +539,28 @@ def obj_identifier(value: str, fallback: str) -> str:
     return cleaned or fallback
 
 
+def normalized_path_key(path: str | Path | None) -> str | None:
+    if path is None:
+        return None
+    return str(Path(path)).replace("\\", "/").lower()
+
+
+def material_name_for_mesh(info: MeshInfo, material_name_overrides: dict[str, str] | None = None) -> str:
+    if material_name_overrides:
+        source_key = normalized_path_key(info.source)
+        if source_key and source_key in material_name_overrides:
+            return material_name_overrides[source_key]
+        mesh_key = f"mesh:{info.mesh_name}|material:{info.material_name}"
+        if mesh_key in material_name_overrides:
+            return material_name_overrides[mesh_key]
+    return obj_identifier(info.material_name, "default_material")
+
+
 def write_obj(
     path: Path,
     meshes: list[MeshExport],
     mtllib: str | None = None,
+    material_name_overrides: dict[str, str] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = [
@@ -556,7 +574,7 @@ def write_obj(
     vt_base = 0
     for info, vertices, faces in meshes:
         object_name = obj_identifier(info.mesh_name, Path(info.source).stem)
-        material_name = obj_identifier(info.material_name, "default_material")
+        material_name = material_name_for_mesh(info, material_name_overrides)
         lines.append(f"o {object_name}")
         lines.append(f"# source {info.source}")
         lines.append(f"# material {info.material_name}")

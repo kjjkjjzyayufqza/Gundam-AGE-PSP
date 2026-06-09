@@ -18,7 +18,6 @@ Command groups:
 | `xpck extract` | extract one XPCK archive |
 | `asset` | export one archive to textures/models/material manifests |
 | `character` | export character archive; animation is opt-in |
-| `map validate` | export selected map archives and build reports/viewer |
 | `map survey` | large-sample map scan |
 | `index` | build model/texture archive index |
 
@@ -35,11 +34,17 @@ Command groups:
 | `age_asset_pipeline.py` | one-archive export pipeline |
 | `age_asset_index.py` | archive-level model/texture/material index builder |
 
+## Data Files: `tools/data/`
+
+| File | Purpose |
+|---|---|
+| `mesh_texture_mappings.json` | reviewed per-archive mesh-to-texture assignments used by `age_asset_pipeline.py` before writing MTL/OBJ/glTF |
+
 ## Research Package: `tools/research/`
 
 | Module | Purpose |
 |---|---|
-| `age_map_validation.py` | batch map export, JSON/MD report, HTML viewer |
+| `age_map_report.py` | map summary/report helpers reused by survey tooling |
 | `age_map_survey.py` | large map survey runner |
 | `age_model_survey.py` | XMPR/XPVB/XPVI survey over XPCK archives |
 | `age_static_model_catalog.py` | catalog from model survey JSON |
