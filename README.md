@@ -146,6 +146,7 @@ age_start.py
   character     -> age_asset_pipeline with animation opt-in
   map survey    -> research.age_map_survey
   index         -> age_asset_index
+  fx-index      -> age_fx_index (game-native effect_config + XPCK members)
 ```
 
 Important defaults:
@@ -193,11 +194,14 @@ python .\tools\age_start.py map survey `
 
 ## Tool Layout
 
-Core reusable Python tools are flat in `tools/` for simple direct execution.
+The Rust viewer is the root crate. Core reusable Python tools are flat in
+`tools/` for simple direct execution.
 
 | Path | Purpose |
 |---|---|
-| `tools/age_start.py` | Main user-facing entry point |
+| `Cargo.toml`, `src/` | `age_viewer` GUI: search, 3D/texture preview, glTF export |
+| `tests/real_resource_tree.rs` | Opt-in checks against a real resource tree |
+| `tools/age_start.py` | Main user-facing entry point for the Python pipeline |
 | `tools/` | Core archive, texture, model, material, pipeline, and index modules |
 | `tools/research/` | Validation, survey, catalog, probe, and preview helpers |
 | `tools/tests/` | Unit tests |
@@ -205,10 +209,77 @@ Core reusable Python tools are flat in `tools/` for simple direct execution.
 
 Detailed tool notes: [docs/TOOLING.md](docs/TOOLING.md).
 
+## GUI Viewer (`age_viewer`)
+
+A desktop viewer for browsing the unpacked resource tree, previewing models and
+textures, and exporting models to glTF. It is read-only: there is no repack or
+write-back path.
+
+Requires a Rust toolchain (edition 2024) and a GPU backend (DirectX 12 or
+Vulkan).
+
+```powershell
+cargo run --release
+```
+
+Use `--release`. A debug build indexes the tree roughly sixty times slower
+because the Level-5 decoders are byte-at-a-time.
+
+Workflow:
+
+1. `File > Open resource root` and pick the unpacked `psp` directory. The root is
+   remembered and re-indexed on the next launch.
+2. Search by name or path. Filter with `Has models` / `Has textures` and the
+   `Area` selector.
+3. Click a result to preview it. Left-drag orbits, right or middle-drag pans,
+   scroll zooms.
+4. `Export` writes the selected archive, or every archive matching the current
+   search, as glTF plus PNG textures and a JSON report.
+
+Geometry is exported in its decoded bind pose; animation is not executed.
+
+### Verifying against real game data
+
+The integration tests are opt-in because they need game data, which is not in
+this repository. Point them at a resource root with either the `AGE_PSP_ROOT`
+environment variable or an `age_psp_root.txt` file at the repository root, then:
+
+```powershell
+cargo test --release --test real_resource_tree -- --nocapture
+```
+
+With neither present the tests report skipped and pass. `age_psp_root.txt` is
+machine-local and git-ignored.
+
+Those tests pin the Rust decoders to the validated Python ones: per-mesh vertex
+and face counts must match `tools/research/_age_viewer_parity.py` exactly, and
+UV orientation is asserted so a regression cannot silently flip every model.
+
 ## Repository Layout
+
+The Rust viewer is the root crate. The Python research pipeline lives under
+`tools/`.
 
 ```text
 Gundam-AGE-PSP/
+  Cargo.toml            # age_viewer crate (GUI viewer + glTF export)
+  src/                  # Rust: formats, renderer, GUI
+    level5.rs           # Level-5 compression decode
+    xpck.rs             # XPCK archive directory
+    imgp.rs             # IMGP .xi texture decode
+    xmpr.rs             # XMPR .prm mesh decode
+    material.rs         # RES.bin/CHRP00 + .txp material binding
+    scene.rs            # archive -> previewable scene
+    gltf.rs             # static glTF 2.0 export
+    index.rs            # threaded resource-tree scan + search
+    render.rs           # orbit camera
+    gpu_renderer.rs     # wgpu offscreen renderer (per-mesh textures)
+    shaders/mesh.wgsl
+    theme.rs            # UI design tokens
+    gui.rs, gui/        # egui shell, search, viewport, inspector, batch export
+  tests/
+    real_resource_tree.rs   # opt-in checks against real game data
+  capture_ui.ps1        # screenshot helper for UI verification
   README.md
   .gitignore
   tools/
@@ -220,6 +291,7 @@ Gundam-AGE-PSP/
     age_gltf_tool.py
     age_asset_pipeline.py
     age_asset_index.py
+    age_fx_index.py
     research/
       age_map_report.py
       age_map_survey.py
@@ -234,9 +306,13 @@ Gundam-AGE-PSP/
     TOOLING.md
     THIRD_PARTY_REFERENCES.md
     ASSET_EXTRACTION_RESEARCH.md
+    AGE_FX_NATIVE_INDEX_RESEARCH.md
+    AGE_FX_SESSION_2026-07-25.md
+    AGE_ITEM_HASH_INDEX.md
     LEVEL5_ASSET_WORKFLOW.md
     RESEARCH_LOG.md
   outputs/          # ignored generated artifacts
+                    # age_fx_ms/ = Gundam AGE-FX suit exports + AGE_FX_PARTS.md
   external_tools/   # ignored local third-party clones
 ```
 
@@ -346,9 +422,13 @@ Do not commit:
 - generated PNG/OBJ/MTL/glTF/bin files;
 - `outputs/`;
 - local third-party clones under `external_tools/`;
-- `tools/StudioElevenAnimationProbe/`.
+- `tools/StudioElevenAnimationProbe/`;
+- Rust build output in `target/`.
 
-The `.gitignore` file is configured for those boundaries.
+The `.gitignore` file is configured for those boundaries. It ignores game asset
+extensions (`.xc`, `.prm`, `.xi`, `.mbn`, `.gltf`, `.obj`, and similar)
+repository-wide, not just under `outputs/`, so extracted content cannot be
+committed by accident from a new location.
 
 
 

@@ -1,3 +1,49 @@
+# Rust build output (the viewer crate lives at the repository root).
+/target/
+
+# Machine-local path to the unpacked PSP resource tree, used by opt-in tests.
+/age_psp_root.txt
+
+# UI verification screenshots produced by capture_ui.ps1.
+/ui_capture.png
+/ui_crop_*.png
+
+# Generated extraction outputs contain copyrighted game assets.
+outputs/
+out/
+
+# Extracted or converted game content must never be committed, wherever it lands.
+*.xc
+*.xb
+*.xa
+*.xv
+*.xk
+*.xq
+*.xr
+*.prm
+*.xi
+*.mbn
+*.txp
+*.mtr
+*.atr
+*.cmn
+*.mtn2
+*.mtninf
+*.mtminf
+*.imminf
+*.imm2
+*.gltf
+*.glb
+*.bin
+*.obj
+*.mtl
+*.fbx
+*.dae
+*.iso
+*.cso
+*.pmf
+*.at3
+
 # Python/cache
 __pycache__/
 *.py[cod]
@@ -5,10 +51,6 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-
-# Generated extraction outputs may contain copyrighted game assets.
-outputs/
-out/
 
 # Third-party source clones. Keep links and usage notes in docs instead.
 external_tools/
