@@ -20,6 +20,8 @@ Command groups:
 | `character` | export character archive; animation is opt-in |
 | `map survey` | large-sample map scan |
 | `index` | build model/texture archive index |
+| `fx-index` | inventory effect packages from game-native `effect_config.cfg.bin` + XPCK members |
+| `preview` | render glTF/OBJ PNG previews via Blender headless CLI |
 
 ## Core Tools: `tools/`
 
@@ -33,6 +35,8 @@ Command groups:
 | `age_pose_export.py` | experimental posed OBJ helper |
 | `age_asset_pipeline.py` | one-archive export pipeline |
 | `age_asset_index.py` | archive-level model/texture/material index builder |
+| `age_fx_index.py` | game-native effect catalog parser and model/texture member inventory |
+| `age_blender_preview.py` | Blender headless preview renderer for exported glTF/OBJ |
 
 ## Data Files: `tools/data/`
 

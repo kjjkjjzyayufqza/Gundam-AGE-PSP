@@ -657,7 +657,57 @@ in `ASSET_EXTRACTION_RESEARCH.md`.
 - Existing pipeline exports are linked into the index when matching
   `_asset_pipeline_manifest.json` files are present under `outputs/`.
 
+### 2026-07-25 - Game-native age-fx index located
 
+- Found game-native FX catalogs under
+  `cmn/res/eff/effect_config.cfg.bin` and
+  `cmn/res/eff/effect_define_field.cfg.bin` (Level-5 binary CFG with
+  `EFFECT_CONFIG*` CRC32 tags and `#/eff/` string table of effect ids / `.xc`
+  names).
+- `load_effect_chara_info.cfg.bin` is a helper, not a global FX package list.
+- Per-package models/textures still come from each XPCK filename table.
+- Added `tools/age_fx_index.py` and `age_start.py fx-index`; documented in
+  `docs/AGE_FX_NATIVE_INDEX_RESEARCH.md`.
+- Live inventory on local unpack: 177 native config archives, 649 disk
+  `psp/eff` archives; member inspect proves `.prm`/`.xi` resolution.
 
+### 2026-07-25 - Gundam AGE-FX (mobile suit) identified and fully inventoried
+
+**Full session write-up:** `docs/AGE_FX_SESSION_2026-07-25.md`  
+**Part inventory:** `outputs/age_fx_ms/AGE_FX_PARTS.md` + `AGE_FX_PARTS_INVENTORY.json`
+
+Summary of findings:
+
+1. **Name collision:** User “age-fx” means **Gundam AGE-FX** (机体), not
+   `psp/eff` particle effects. Effect-index work remains valid for particles
+   only.
+2. **Mapping failure:** `dbMSText` short-name order aligned to `ms*` packages
+   via Dark Hound (`ms008000`) wrongly predicted `ms042000` for AGE-FX.
+   Linear map is **invalid** (`outputs/manifests/ms_name_to_package_hypothesis.json`
+   kept as negative evidence).
+3. **User rejections:** `ms042*`, `ms041*`, `ms104*`, and other sheet candidates
+   are not AGE-FX. `ms008000` confirmed Dark Hound only.
+4. **Item hashes:** User LE 4-byte IDs documented in
+   `docs/AGE_ITEM_HASH_INDEX.md` (AGE-1 red arm/leg/fist, beam lance/hammer,
+   Shira Chronos leg, loadout slots). Present in `item_config` /
+   `agesystem_config` / `database.cfg.bin`. **Item ID → `ms*` package join
+   still open** (secondary agesystem fields did not CRC-match `DefaultLib` names).
+5. **Identification that worked:** Only full MS whose RES references funnel
+   hardpoint meshes `*_fn1` is **`ms010000`**. User visual confirm.
+6. **Confirmed:** `ms010000` = ガンダムＡＧＥ－ＦＸ.
+7. **Body parts:** `ms010100` head/core (+embedded arms), `ms010200` arms/hands
+   (no standalone folder), `ms010300` legs, `ms010400` backpack/binders; full
+   assembly `ms010000_p000.xc` (8 meshes, 4 textures, full skeleton + weights).
+8. **Weapons:** exclusive **Ｃファンネル** packages `fn010000` (primary) and
+   `fn002000` (alt), co-packed in battles `ga_ws_18_0040/0041` and ev11 events.
+   No exclusive handheld model package co-referenced with `ms010000` found;
+   text lists FX Beam Zamber as a name only.
+9. **Tooling:** `age_blender_preview.py` + `age_start.py preview` for multi-view
+   Blender headless PNG; framing fixed (earlier “legs only” crop was a camera bug).
+10. **Exports:** `outputs/age_fx_ms/ms010000_p000`, `ms010100/300/400_p000`,
+    `fn010000_p000`, `fn002000_p000`, previews under `outputs/age_fx_ms/previews/`.
+
+Open follow-ups: agesystem item→model reverse map; AGE-FX default loadout IDs;
+AGE-2 wing-hand wear ID; optional FX Burst mesh distinction.
 
 

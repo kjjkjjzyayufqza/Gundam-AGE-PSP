@@ -126,6 +126,36 @@ def command_index(args: argparse.Namespace) -> int:
     return age_asset_index.main(argv)
 
 
+def command_fx_index(args: argparse.Namespace) -> int:
+    import age_fx_index
+
+    argv: list[str] = ["--json", args.json]
+    if args.unpack_root:
+        argv.insert(0, args.unpack_root)
+    append_if(argv, "--markdown", args.markdown)
+    append_bool(argv, "--native-only", args.native_only)
+    append_bool(argv, "--no-members", args.no_members)
+    append_if(argv, "--member-limit", str(args.member_limit) if args.member_limit is not None else None)
+    return age_fx_index.main(argv)
+
+
+def command_preview(args: argparse.Namespace) -> int:
+    import age_blender_preview
+
+    argv = [args.input]
+    append_if(argv, "--out", args.out)
+    append_if(argv, "--out-dir", args.out_dir)
+    append_if(argv, "--blender", args.blender)
+    append_if(argv, "--width", str(args.width) if args.width is not None else None)
+    append_if(argv, "--height", str(args.height) if args.height is not None else None)
+    append_if(argv, "--samples", str(args.samples) if args.samples is not None else None)
+    append_if(argv, "--views", args.views)
+    append_if(argv, "--engine", args.engine)
+    append_if(argv, "--json", args.json)
+    append_if(argv, "--timeout", str(args.timeout) if args.timeout is not None else None)
+    return age_blender_preview.main(argv)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Gundam AGE PSP asset tool entrypoint.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -174,6 +204,39 @@ def build_parser() -> argparse.ArgumentParser:
     index.add_argument("--limit", type=int)
     index.add_argument("--sample-limit", type=int, default=30)
     index.set_defaults(func=command_index)
+
+    fx_index = subparsers.add_parser(
+        "fx-index",
+        help="inventory age-fx from game-native effect_config.cfg.bin + XPCK member tables",
+    )
+    fx_index.add_argument(
+        "unpack_root",
+        nargs="?",
+        help="unpacked root containing psp/ and cmn/ (optional if auto-discoverable)",
+    )
+    fx_index.add_argument("--json", required=True)
+    fx_index.add_argument("--markdown")
+    fx_index.add_argument("--native-only", action="store_true")
+    fx_index.add_argument("--no-members", action="store_true")
+    fx_index.add_argument("--member-limit", type=int)
+    fx_index.set_defaults(func=command_fx_index)
+
+    preview = subparsers.add_parser(
+        "preview",
+        help="render glTF/OBJ preview PNG via Blender headless CLI",
+    )
+    preview.add_argument("input", help="glTF/OBJ path or package directory containing models/")
+    preview.add_argument("--out", help="PNG output path")
+    preview.add_argument("--out-dir", help="PNG output directory")
+    preview.add_argument("--blender", help="path to blender.exe")
+    preview.add_argument("--width", type=int, default=1400)
+    preview.add_argument("--height", type=int, default=900)
+    preview.add_argument("--samples", type=int, default=16)
+    preview.add_argument("--views", default="front,side,perspective")
+    preview.add_argument("--engine", default="auto", choices=["auto", "EEVEE", "CYCLES", "WORKBENCH"])
+    preview.add_argument("--json", help="write result JSON")
+    preview.add_argument("--timeout", type=int, default=300)
+    preview.set_defaults(func=command_preview)
 
     return parser
 
