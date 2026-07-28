@@ -585,8 +585,8 @@ def write_mtl(
 
     lines = [
         "# Experimental MTL generated from Gundam AGE PSP material binding evidence",
-        "# TXP owner bindings use CRC32-confirmed CHRP00 strings.",
-        "# Texture image mapping prefers direct TXP/XI numbered-stem matches, then falls back to resource order.",
+        "# Primary texture binding: CHRP00 MaterialData image CRC -> TextureData index -> NNN.xi.",
+        "# TXP CRC32 still identifies material/texproj owners; TXP stem is only a fallback.",
         "# Mesh texture mappings are explicit model-to-texture assignments recorded for textured review.",
     ]
     records = []
@@ -647,8 +647,8 @@ def write_mtl(
         if material_meshes and all(normalized_path_key(mesh.get("source")) in overridden_sources for mesh in material_meshes):
             continue
         material_name = obj_identifier(material.get("material_name", ""), "default_material")
-        texture_name = (material.get("texture_name_candidates") or [None])[0]
-        xi_path = material.get("xi_path_by_txp_stem")
+        texture_name = material.get("texture_name") or (material.get("texture_name_candidates") or [None])[0]
+        xi_path = material.get("xi_path") or material.get("xi_path_by_txp_stem")
         texture_mapping_confidence = material.get("texture_image_binding_confidence") or "unresolved"
         if not xi_path and texture_name:
             xi_path = xi_by_texture_name.get(texture_name)
@@ -788,7 +788,7 @@ def run_pipeline(args: argparse.Namespace, extracted_dir: Path, source_kind: str
             "Textures are PNG exports from IMGP; the default texture layout applies PSP 16-byte x 8-row deswizzle.",
             "OBJ vertex records are decoded from XPVB; inspect models.meshes[].geometry.position_semantic before treating them as confirmed position geometry.",
             "Faces remain experimental when inferred from PSP XPVI primitive type 2.",
-            "Material bindings include CRC32-confirmed TXP owner strings and direct TXP/XI numbered-stem texture matches where present.",
+            "Material bindings prefer CHRP00 MaterialData image CRC -> TextureData index -> NNN.xi; TXP stem is fallback only.",
         ],
     }
     manifest_path = Path(args.json) if args.json else out_dir / "_asset_pipeline_manifest.json"

@@ -26,7 +26,7 @@ All created files are under:
 | Texture export | Working for sampled `.xi` / `IMGP` files | `ms008000_p000.xc` exports five coherent 16-color PNGs; indexed data is PSP 16-byte x 8-row deswizzled |
 | Level-5 compression | Implemented for observed methods | no compression, LZ10, Huffman4, Huffman8, RLE, zlib |
 | Resource tables | Partly decoded | `RES.bin` decompresses to `CHRP00` and readable part/resource names |
-| Material/resource params | Initial binding working | `age_param_probe.py` records raw params; `age_material_bind.py` links PRM material names to TXP/MTR/ATR via CRC32-confirmed CHRP00 strings |
+| Material/resource params | CHRP-native albedo bind | `age_material_bind.py` / `src/material.rs`: MaterialData→TextureData→`NNN.xi`; TXP CRC for owners/MTR/ATR only; TXP stem is fallback (see 2026-07-28 log) |
 | Model data | Working for a complete sampled mobile suit | `ms008000_p000.xc` exports 12 PRMs as a coherent 10,473-vertex OBJ in bind pose; float32x3/float32x4 samples also export |
 | Weight sidecar | Working for sampled skinned meshes | `*.weights.json` records XPVB slot 7 raw weights, normalized weights, OBJ vertex indices, and XMPR node hashes; `ms008000`, `ms007000`, and `ue001000` have zero unmapped weight records |
 | Static weighted glTF | Working for sampled skinned and static meshes | `*.gltf` plus `*.bin` exports POSITION, TEXCOORD_0, material textures, JOINTS_0/WEIGHTS_0, and MBN bind skin nodes where hashes match; no action files are executed |
@@ -193,10 +193,18 @@ unsupported field names. Current manifests:
 - `outputs\manifests\bs001000_param_probe.json`: 17 files, 0 failures.
 - `outputs\manifests\fn024000_param_probe.json`: 12 files, 0 failures.
 
-`age_material_bind.py` builds a higher-level binding manifest. Confirmed
-relationship: the first two 32-bit words in `.txp` are CRC32 values of
-`CHRP00` strings. Once a `.txp` owner is identified, matching numbered stems
-such as `001.txp -> 001.xi` are used as the preferred texture-image binding.
+`age_material_bind.py` builds a higher-level binding manifest.
+
+Confirmed relationships:
+
+- `.txp` first words are CRC32 values of `CHRP00` material / `_texproj0` strings
+  (owner identity and same-stem `.mtr`/`.atr` links).
+- **Albedo (2026-07-28):** `CHRP00` MaterialData image CRC → TextureData index →
+  `NNN.xi`. Do **not** prefer `N.txp -> N.xi` as the primary path; that heuristic
+  mis-binds human packs such as `hu118300` (body owned `000.txp` but body albedo
+  is `001.xi`). TXP stem is fallback only when MaterialData has no image.
+- Viewer path: `src/material.rs` uses the same priority
+  (`chrp_material_data_texture_index`).
 
 Observed TXP CRC32 matches:
 

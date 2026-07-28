@@ -710,4 +710,65 @@ Summary of findings:
 Open follow-ups: agesystem item→model reverse map; AGE-FX default loadout IDs;
 AGE-2 wing-hand wear ID; optional FX Burst mesh distinction.
 
+## 2026-07-28
+
+### CHRP-native material→texture binding (no per-character hardcode)
+
+**Symptom:** Some models used wrong textures. Example `hu118300_p000.xc`: face
+mesh (`DefaultLib.hu118300_10`) had no `map_Kd`; body meshes
+(`DefaultLib.hu118300_20`) sampled the **face** atlas (`000.xi` / `000.png`).
+Clothes atlas is `001.xi`. User required a game-native fix, not hardcode maps.
+
+**Root cause (old binder):**
+
+1. TXP CRC correctly identified body material as owner of `000.txp`.
+2. Heuristic `N.txp → N.xi` then forced body → `000.xi` (face image).
+3. Face material has **no** `.txp` (only body has `_texproj0` in RES strings), so
+   face stayed unresolved.
+4. Human packs often have `txp_count < xi_count`; TXP numbering is not the
+   albedo slot index. Mobile-suit packs where TXP/XI counts match (e.g.
+   `ms008000`) looked fine by accident.
+
+**Game-native path (Level-5 CHRP00 / RES, StudioEleven-compatible):**
+
+| RES type | Name | Role |
+|---:|---|---|
+| 240 | `TextureData` | ordered texture slots; index → `NNN.xi` |
+| 290 | `MaterialData` | material name + image CRCs (up to 4) |
+
+```text
+MaterialData.img0 CRC
+  -> matching TextureData entry
+  -> TextureData array index i
+  -> NNN.xi (sorted/numbered XI list)
+```
+
+`.txp` remains for material / `_texproj0` identity and same-stem `.mtr`/`.atr`.
+TXP stem → XI is **fallback only** when MaterialData has no enabled image.
+
+**Evidence samples after change:**
+
+| Archive | Result |
+|---|---|
+| `hu118300` | `_10` → `000.xi` (face), `_20` → `001.xi` (body); confidence `chrp_material_data_texture_index` |
+| `hu101000` | face → `000.xi`; body materials → `001`/`002.xi` |
+| `ms008000` | still 1:1 five materials → `000`..`004.xi` (no regression) |
+| `bs001000` | both material variants → TextureData index 0 / `000.xi` per CHRP |
+
+**Code / docs:**
+
+- `tools/age_material_bind.py` — parse CHRP sections; primary bind path
+- `tools/age_asset_pipeline.py` — MTL uses `xi_path` from CHRP first
+- `src/material.rs` — viewer same priority (`BindConfidence::ChrpMaterialData`)
+- `tools/tests/test_age_material_bind.py` — synthetic CHRP parse test
+- `docs/BINARY_FORMATS.md`, `RESOURCE_ARCHITECTURE.md`,
+  `LEVEL5_ASSET_WORKFLOW.md`, `ASSET_EXTRACTION_RESEARCH.md` status row
+
+**Policy:** Do not add per-character entries in `mesh_texture_mappings.json` for
+this class of bug. Fix the binder against CHRP tables.
+
+**Validation:** Python material-bind unit tests pass; Rust `material` tests
+pass; re-exported `outputs/pipeline/hu118300` MTL has
+`_10 → 000.png`, `_20 → 001.png`.
+
 

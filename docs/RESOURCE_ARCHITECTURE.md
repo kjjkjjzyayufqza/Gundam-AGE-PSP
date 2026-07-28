@@ -132,14 +132,21 @@ Material-related files:
 | `.atr` | `ATRP01` render/attribute block |
 | `.txp` | texture parameter block; first words match CRC32 of resource strings |
 
-Binding priority:
+Binding priority (updated 2026-07-28):
 
-1. TXP owner CRC32 -> `CHRP00` string.
-2. Same numbered TXP/XI stem, for example `013.txp -> 013.xi`.
-3. Mesh-name/resource-order fallback.
-4. Leave unresolved and count in reports.
+1. **Primary (game-native):** `CHRP00` MaterialData image CRC → TextureData
+   index → `NNN.xi` (Level-5 RES types 290 / 240).
+2. TXP owner CRC32 → material / `_texproj0` identity and same-stem `.mtr`/`.atr`.
+3. TXP stem → same-numbered `.xi` only as **fallback** when MaterialData does
+   not resolve an image (do not prefer this over CHRP; human packs break).
+4. Mesh-name / resource-order heuristics as lower fallback.
+5. Leave unresolved and count in reports.
 
-Remaining visible map issues are mostly in this layer.
+Do not hardcode per-character mesh→texture maps for albedo. If binding is
+wrong, fix CHRP parsing or the fallback chain, not individual archive names.
+
+Remaining visible map issues are mostly still in this layer (missing in-archive
+`.xi`, multi-pass materials), not the human face/body TXP-stem bug.
 
 ## Skeleton and Animation Layer
 

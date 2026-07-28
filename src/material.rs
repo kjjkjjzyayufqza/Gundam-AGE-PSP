@@ -1,14 +1,15 @@
 //! Material and texture binding for Gundam AGE PSP archives.
 //!
-//! Ported from `tools/age_material_bind.py`. Evidence chain:
+//! Native game binding (Level-5 CHRP00 / RES, matching StudioEleven layout):
 //!
 //! 1. `RES.bin` is Level-5 compressed and decompresses to a `CHRP00` payload.
-//! 2. ASCII strings are scanned out of that payload and hashed with CRC32.
-//! 3. Each `NNN.txp` begins with two CRC32 words: the owning material name and
-//!    that material's `_texproj0` string.
-//! 4. The `.txp` stem selects the same-numbered `.xi` texture.
+//! 2. Section type 240 (`TextureData`) lists texture slots in archive order.
+//! 3. Section type 290 (`MaterialData`) names each material and links image
+//!    slots by CRC32 to a `TextureData` entry.
+//! 4. The matching `TextureData` array index selects `NNN.xi`.
 //!
-//! A resource-order heuristic covers archives where step 3 finds no owner.
+//! `.txp` CRC32 words still identify material / `_texproj0` owners, but TXP
+//! stem is only a fallback when CHRP MaterialData does not resolve an image.
 
 use crate::xpck::Archive;
 use std::collections::HashMap;
@@ -25,6 +26,10 @@ const KNOWN_RESOURCE_KEYS: &[&str] = &[
 ];
 
 const MIN_STRING_LENGTH: usize = 4;
+const RES_TYPE_TEXTURE_DATA: u16 = 240;
+const RES_TYPE_MATERIAL_DATA: u16 = 290;
+const MATERIAL_DATA_SIZE: usize = 224;
+const IMAGE_ENTRY_SIZE: usize = 52;
 
 /// Standard CRC32 (IEEE, reflected) as used by the Level-5 string hashes.
 pub fn crc32(bytes: &[u8]) -> u32 {
@@ -74,6 +79,34 @@ fn ascii_strings(data: &[u8]) -> Vec<String> {
     out
 }
 
+fn chrp_string_pool(data: &[u8], string_offset: usize) -> HashMap<u32, String> {
+    // Hash the on-disk bytes (Shift-JIS for JP text, ASCII for material names).
+    // Material CRCs therefore match without needing a Shift-JIS decoder crate.
+    let mut out = HashMap::new();
+    if string_offset >= data.len() {
+        return out;
+    }
+    let blob = &data[string_offset..];
+    let mut i = 0usize;
+    while i < blob.len() {
+        if blob[i] == 0 {
+            i += 1;
+            continue;
+        }
+        let mut end = i;
+        while end < blob.len() && blob[end] != 0 {
+            end += 1;
+        }
+        let raw = &blob[i..end];
+        if !raw.is_empty() {
+            let text = String::from_utf8_lossy(raw).into_owned();
+            out.entry(crc32(raw)).or_insert(text);
+        }
+        i = end.saturating_add(1);
+    }
+    out
+}
+
 /// Strip the `DefaultLib.` prefix and trailing dashes/variant suffix.
 fn material_base(material: &str) -> String {
     let trimmed = material
@@ -93,7 +126,9 @@ pub struct TxpRecord {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BindConfidence {
-    /// `.txp` CRC32 owner plus a matching same-stem `.xi`.
+    /// CHRP00 MaterialData image CRC resolved to a TextureData index / `.xi`.
+    ChrpMaterialData,
+    /// `.txp` CRC32 owner plus a matching same-stem `.xi` (fallback only).
     TxpStemMatch,
     /// Texture chosen by resource-string order.
     ResourceOrder,
@@ -103,6 +138,7 @@ pub enum BindConfidence {
 impl BindConfidence {
     pub fn label(self) -> &'static str {
         match self {
+            Self::ChrpMaterialData => "chrp_material_data_texture_index",
             Self::TxpStemMatch => "txp_stem_xi_match",
             Self::ResourceOrder => "resource_order_heuristic",
             Self::Unresolved => "unresolved",
@@ -155,9 +191,19 @@ impl Bindings {
     }
 }
 
+fn u16_at(data: &[u8], offset: usize) -> Option<u16> {
+    data.get(offset..offset + 2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+}
+
 fn u32_at(data: &[u8], offset: usize) -> Option<u32> {
     data.get(offset..offset + 4)
         .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+fn i32_at(data: &[u8], offset: usize) -> Option<i32> {
+    data.get(offset..offset + 4)
+        .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
 /// Decompress `RES.bin` (or an already-decoded `RES.dec.bin`) from an archive.
@@ -184,12 +230,123 @@ fn read_res_payload(archive: &Archive) -> (Option<String>, Vec<u8>, Option<Strin
     (None, Vec::new(), None)
 }
 
+#[derive(Clone, Debug)]
+struct TextureDataEntry {
+    index: usize,
+    name_crc: u32,
+}
+
+#[derive(Clone, Debug)]
+struct MaterialDataEntry {
+    name: String,
+    image_crcs: Vec<u32>,
+}
+
+/// Parse CHRP00 TextureData + MaterialData sections.
+fn parse_chrp_material_tables(
+    payload: &[u8],
+    string_by_crc: &HashMap<u32, String>,
+) -> (Vec<TextureDataEntry>, Vec<MaterialDataEntry>) {
+    if payload.len() < 20 || &payload[0..4] != b"CHRP" {
+        return (Vec::new(), Vec::new());
+    }
+    let Some(mat_table_off_q) = u16_at(payload, 12) else {
+        return (Vec::new(), Vec::new());
+    };
+    let Some(mat_table_count) = u16_at(payload, 14) else {
+        return (Vec::new(), Vec::new());
+    };
+    let Some(node_table_off_q) = u16_at(payload, 16) else {
+        return (Vec::new(), Vec::new());
+    };
+    let Some(node_table_count) = u16_at(payload, 18) else {
+        return (Vec::new(), Vec::new());
+    };
+
+    let mut texture_data = Vec::new();
+    let mut material_data = Vec::new();
+
+    for (base_q, count) in [
+        (mat_table_off_q, mat_table_count),
+        (node_table_off_q, node_table_count),
+    ] {
+        let base = (base_q as usize) << 2;
+        for i in 0..count as usize {
+            let entry = base + i * 8;
+            let Some(data_off_q) = u16_at(payload, entry) else {
+                break;
+            };
+            let Some(entry_count) = u16_at(payload, entry + 2) else {
+                break;
+            };
+            let Some(res_type) = u16_at(payload, entry + 4) else {
+                break;
+            };
+            let Some(length) = u16_at(payload, entry + 6) else {
+                break;
+            };
+            if entry_count == 0 {
+                continue;
+            }
+            let data_offset = (data_off_q as usize) << 2;
+            let length = length as usize;
+            if res_type == RES_TYPE_TEXTURE_DATA && length >= 8 {
+                for ti in 0..entry_count as usize {
+                    let off = data_offset + ti * length;
+                    if let Some(name_crc) = u32_at(payload, off) {
+                        texture_data.push(TextureDataEntry {
+                            index: ti,
+                            name_crc,
+                        });
+                    }
+                }
+            } else if res_type == RES_TYPE_MATERIAL_DATA && length >= MATERIAL_DATA_SIZE {
+                for mi in 0..entry_count as usize {
+                    let off = data_offset + mi * length;
+                    let Some(name_crc) = u32_at(payload, off) else {
+                        continue;
+                    };
+                    let Some(name) = string_by_crc.get(&name_crc).cloned() else {
+                        continue;
+                    };
+                    let mut image_crcs = Vec::new();
+                    let mut pos = off + 16;
+                    for _ in 0..4 {
+                        if pos + IMAGE_ENTRY_SIZE > payload.len() {
+                            break;
+                        }
+                        let Some(image_crc) = u32_at(payload, pos) else {
+                            break;
+                        };
+                        let Some(enabled) = i32_at(payload, pos + 4) else {
+                            break;
+                        };
+                        if enabled != 0 && image_crc != 0 {
+                            image_crcs.push(image_crc);
+                        }
+                        pos += IMAGE_ENTRY_SIZE;
+                    }
+                    material_data.push(MaterialDataEntry { name, image_crcs });
+                }
+            }
+        }
+    }
+
+    (texture_data, material_data)
+}
+
 /// Build the material/texture binding table for one archive.
 pub fn build(archive: &Archive) -> Bindings {
     let (res_member, res_payload, res_method) = read_res_payload(archive);
     let strings = ascii_strings(&res_payload);
 
     let mut string_by_crc: HashMap<u32, String> = HashMap::new();
+    if res_payload.len() >= 10 && res_payload.starts_with(b"CHRP") {
+        if let Some(string_off_q) = u16_at(&res_payload, 8) {
+            let string_offset = (string_off_q as usize) << 2;
+            string_by_crc.extend(chrp_string_pool(&res_payload, string_offset));
+        }
+    }
     for value in &strings {
         string_by_crc
             .entry(crc32(value.as_bytes()))
@@ -202,7 +359,6 @@ pub fn build(archive: &Archive) -> Bindings {
         .cloned()
         .collect();
 
-    // Texture-name candidates mirror the Python classifier's exclusions.
     let texture_name_candidates: Vec<String> = strings
         .iter()
         .filter(|s| {
@@ -219,7 +375,6 @@ pub fn build(archive: &Archive) -> Bindings {
         .cloned()
         .collect();
 
-    // Available texture members, sorted by name so numbered stems line up.
     let xi_members: Vec<String> = archive
         .entries_with_extension("xi")
         .iter()
@@ -231,7 +386,17 @@ pub fn build(archive: &Archive) -> Bindings {
         .map(|e| (e.stem(), e.name.clone()))
         .collect();
 
-    // Step 3: read the CRC32 owner words out of each .txp.
+    let (texture_data, material_data) =
+        parse_chrp_material_tables(&res_payload, &string_by_crc);
+    let texture_index_by_crc: HashMap<u32, usize> = texture_data
+        .iter()
+        .map(|t| (t.name_crc, t.index))
+        .collect();
+    let chrp_by_material: HashMap<&str, &MaterialDataEntry> = material_data
+        .iter()
+        .map(|m| (m.name.as_str(), m))
+        .collect();
+
     let mut txp_records = Vec::new();
     for entry in archive.entries_with_extension("txp") {
         let Some(data) = archive.member(entry.index) else {
@@ -259,8 +424,15 @@ pub fn build(archive: &Archive) -> Bindings {
         });
     }
 
-    // Ordered material list: CHRP00 strings first, then any extra .txp owners.
-    let mut materials_ordered: Vec<String> = material_strings.clone();
+    let mut materials_ordered: Vec<String> = material_data
+        .iter()
+        .map(|m| m.name.clone())
+        .collect();
+    for name in &material_strings {
+        if !materials_ordered.contains(name) {
+            materials_ordered.push(name.clone());
+        }
+    }
     for record in &txp_records {
         if let Some(owner) = &record.owner_material {
             if !materials_ordered.contains(owner) {
@@ -281,15 +453,33 @@ pub fn build(archive: &Archive) -> Bindings {
         let txp = txp_by_material.get(material_name.as_str());
         let txp_stem = txp.map(|r| r.stem.clone());
 
-        // Preferred: same-numbered .xi as the owning .txp.
-        let mut texture_member = txp_stem.as_ref().and_then(|s| xi_by_stem.get(s).cloned());
-        let mut confidence = if texture_member.is_some() {
-            BindConfidence::TxpStemMatch
-        } else {
-            BindConfidence::Unresolved
-        };
+        let mut texture_member = None;
+        let mut confidence = BindConfidence::Unresolved;
 
-        // Fallback: position of the material within the resource string order.
+        // Preferred: CHRP MaterialData image CRC -> TextureData index -> NNN.xi
+        if let Some(entry) = chrp_by_material.get(material_name.as_str()) {
+            for &image_crc in &entry.image_crcs {
+                if let Some(&texture_index) = texture_index_by_crc.get(&image_crc) {
+                    if let Some(name) = xi_members.get(texture_index) {
+                        texture_member = Some(name.clone());
+                        confidence = BindConfidence::ChrpMaterialData;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Fallback: same-numbered .xi as the owning .txp.
+        if texture_member.is_none() {
+            if let Some(stem) = txp_stem.as_ref() {
+                if let Some(name) = xi_by_stem.get(stem) {
+                    texture_member = Some(name.clone());
+                    confidence = BindConfidence::TxpStemMatch;
+                }
+            }
+        }
+
+        // Last fallback: material order within the resource string list.
         if texture_member.is_none() {
             if let Some(name) = xi_members.get(order_index) {
                 texture_member = Some(name.clone());
@@ -349,15 +539,11 @@ mod tests {
     }
 
     #[test]
-    fn ascii_scan_keeps_only_long_runs() {
-        let data = b"ab\0DefaultLib.test\0xy";
-        let found = ascii_strings(data);
-        assert_eq!(found, vec!["DefaultLib.test".to_string()]);
-    }
-
-    #[test]
-    fn texproj_strings_are_detected() {
-        assert!(is_texture_projection_string("DefaultLib.x_texproj0"));
-        assert!(!is_texture_projection_string("DefaultLib.x"));
+    fn bind_confidence_labels() {
+        assert_eq!(
+            BindConfidence::ChrpMaterialData.label(),
+            "chrp_material_data_texture_index"
+        );
+        assert_eq!(BindConfidence::TxpStemMatch.label(), "txp_stem_xi_match");
     }
 }

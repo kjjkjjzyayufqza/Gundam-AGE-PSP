@@ -106,10 +106,11 @@ Map extraction path:
 
 1. `.xc` archive -> XPCK parser.
 2. Entries are written under `extracted/`.
-3. `RES.bin` is decompressed to recover `CHRP00` names.
+3. `RES.bin` is decompressed to recover `CHRP00` (names + MaterialData/TextureData).
 4. `.xi` textures are converted to PNG.
 5. `.prm` meshes are decoded to OBJ/glTF.
-6. `.mtr` / `.txp` / `CHRP00` strings build material-to-texture binding.
+6. Material albedo: MaterialData image CRC → TextureData index → `NNN.xi`
+   (TXP is owner/param metadata; stem→XI only if CHRP has no image).
 7. `MTL map_Kd` points OBJ materials to exported PNGs.
 8. Validation writes JSON, Markdown, and HTML viewer.
 
@@ -178,19 +179,41 @@ Map rule:
 
 ## Material Binding
 
-Current material binding order:
+Current material binding order (game-native first; 2026-07-28):
 
-1. Direct `TXP` owner CRC32 match against `CHRP00` resource strings.
-2. Numbered `TXP`/`XI` same-stem match, for example `013.txp -> 013.xi`.
-3. Mesh-name/resource-order fallback.
-4. Unresolved material remains plain in MTL/glTF and is counted in reports.
+1. Parse `CHRP00` from `RES.bin` (Level-5 RES layout, StudioEleven-compatible):
+   - type **240** `TextureData` = ordered texture slots → `NNN.xi` by index;
+   - type **290** `MaterialData` = material name + image CRC links.
+2. Bind albedo as:
+   `MaterialData.img CRC → TextureData[i] → NNN.xi`.
+3. `.txp` CRC32 still identifies material / `_texproj0` owners and links
+   same-stem `.mtr`/`.atr`. **Do not use TXP stem as the primary texture index**
+   (that heuristic mis-binds human packs such as `hu118300`).
+4. TXP stem → same-numbered `.xi` only if CHRP MaterialData has no image.
+5. Mesh-name / resource-order heuristics as lower fallback.
+6. Unresolved material remains plain in MTL/glTF and is counted in reports.
+
+Evidence sample `hu118300_p000.xc`:
+
+| Material | TextureData index | `.xi` | Role |
+|---|---:|---|---|
+| `DefaultLib.hu118300_10` | 0 | `000.xi` | face |
+| `DefaultLib.hu118300_20` | 1 | `001.xi` | body |
+
+Old TXP-stem path bound body to `000.xi` (face) because only `000.txp` exists
+and CRC-owns `_20`. CHRP MaterialData is the authoritative fix; no per-character
+hardcode.
+
+Implementation: `tools/age_material_bind.py`, `src/material.rs`. Confidence
+label for the primary path: `chrp_material_data_texture_index`.
 
 Current unresolved large-map classes:
 
 - `b0101`: mesh-name candidate exists, but no in-archive `.xi` target.
-- `e1101`, `b3104`, `t0201`, `e3108`: TXP owner confirmed, no usable texture
-  candidate yet.
-- `b3205`: resource-string-only plain material, no TXP owner.
+- `e1101`, `b3104`, `t0201`, `e3108`: some materials still need richer
+  multi-image / candidate resolution beyond the first enabled MaterialData
+  image.
+- `b3205`: resource-string-only plain material with no usable image link.
 
 ## GitHub Repositories Used
 

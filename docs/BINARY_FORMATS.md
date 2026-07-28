@@ -68,9 +68,17 @@ Uses:
 - string source for mesh names;
 - material owners;
 - texture projection names;
-- map part/collision names.
+- map part/collision names;
+- **native material→texture slot tables** (RES types 240 / 290; see Material
+  Parameters below).
 
-The material binder compares `.txp` CRC32 words against these strings.
+Header layout matches StudioEleven `RES` (offsets stored as quarter-words):
+string pool offset, material-section table, node-section table. Section entries
+are `(data_offset_q, count, type, length)`.
+
+`.txp` CRC32 words still match material / `_texproj0` strings from this payload,
+but **albedo binding reads MaterialData image CRCs → TextureData indices**, not
+TXP file stems.
 
 ## IMGP / XI Texture
 
@@ -166,7 +174,29 @@ Observed small parameter files:
 
 - first word often matches a material owner string from `CHRP00`;
 - second word often matches `<owner>_texproj0`;
-- same numbered stem commonly binds `NNN.txp` to `NNN.xi`.
+- same-stem `.mtr` / `.atr` parameter files are linked after TXP identifies the
+  material owner.
+
+**Native albedo binding does not use TXP stem as the texture index.** AGE PSP
+`CHRP00` follows the Level-5 RES layout (StudioEleven types):
+
+| Type | Name | Role |
+|---:|---|---|
+| 240 | `TextureData` | ordered texture slots (index → `NNN.xi`) |
+| 290 | `MaterialData` | material name + up to four image links by CRC32 |
+
+Binding used by the tools:
+
+```text
+MaterialData.img0 CRC
+  -> matching TextureData entry
+  -> TextureData array index
+  -> NNN.xi
+```
+
+This is required for human packages such as `hu118300`, where face material
+`_10` has no TXP, body material `_20` owns `000.txp`, but face/body albedos are
+`000.xi` / `001.xi` respectively.
 
 ## MBN Skeleton / Bind Data
 
