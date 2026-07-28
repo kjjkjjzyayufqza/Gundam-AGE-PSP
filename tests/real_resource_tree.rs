@@ -349,17 +349,14 @@ fn exporting_a_character_archive_writes_a_valid_gltf() {
             accessors[ibm]["count"].as_u64().unwrap(),
             joints.len() as u64
         );
-        // Mesh is lifted into skeleton space using MBN head bounds (file data).
-        let mesh_scale = skin["extras"]["mesh_to_skeleton_scale"]
-            .as_f64()
-            .expect("mesh_to_skeleton_scale");
+        // No invented mesh↔skeleton fit extras.
         assert!(
-            mesh_scale > 1.0,
-            "character s16 mesh should scale up into MBN head space, got {mesh_scale}"
+            skin["extras"].get("mesh_to_skeleton_scale").is_none(),
+            "must not invent mesh_to_skeleton_scale"
         );
     }
 
-    // Mesh positions should now live in skeleton/head units (not unit-cube).
+    // Character s16_norm mesh stays in compact unit-ish space (as recorded).
     let mut mesh_max_r = 0.0f64;
     for mesh in doc["meshes"].as_array().expect("meshes") {
         for prim in mesh["primitives"].as_array().expect("prims") {
@@ -374,8 +371,8 @@ fn exporting_a_character_archive_writes_a_valid_gltf() {
         }
     }
     assert!(
-        mesh_max_r > 5.0,
-        "exported mesh should be in MBN/head units after align, max |coord|={mesh_max_r}"
+        mesh_max_r > 0.1 && mesh_max_r < 2.5,
+        "s16_norm character mesh should stay near unit space, max |coord|={mesh_max_r}"
     );
 
     // Mesh nodes that declare a skin index must be in range.

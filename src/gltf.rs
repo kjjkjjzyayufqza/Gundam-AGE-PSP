@@ -272,38 +272,10 @@ pub fn export_scene(
     let mut total_faces = 0usize;
     let mut weighted_vertex_count = 0usize;
 
-    // Mesh vertices (often s16_norm bind pose) and MBN joints live in different
-    // recorded unit systems. Align mesh AABB → MBN head AABB so the exported
-    // geometry sits in the same space as the file-recorded skeleton. Joint
-    // matrices stay pure MBN (no invented bone scaling).
-    let mut mesh_min = [f32::INFINITY; 3];
-    let mut mesh_max = [f32::NEG_INFINITY; 3];
-    for &mesh_index in &selected {
-        for p in &scene.meshes[mesh_index].mesh.positions {
-            for axis in 0..3 {
-                mesh_min[axis] = mesh_min[axis].min(p[axis]);
-                mesh_max[axis] = mesh_max[axis].max(p[axis]);
-            }
-        }
-    }
-    if !mesh_min[0].is_finite() {
-        mesh_min = [0.0; 3];
-        mesh_max = [0.0; 3];
-    }
-    let export_skins_any = options.export_skins
-        && selected
-            .iter()
-            .any(|&i| mesh_has_exportable_weights(&scene.meshes[i].mesh));
-    let (mesh_space_scale, mesh_space_translation) =
-        if export_skins_any {
-            if let Some((bone_min, bone_max)) = scene.skeleton.bind_position_bounds() {
-                mbn::aabb_align_transform(mesh_min, mesh_max, bone_min, bone_max)
-            } else {
-                (1.0, [0.0, 0.0, 0.0])
-            }
-        } else {
-            (1.0, [0.0, 0.0, 0.0])
-        };
+    // Mesh (XPVB s16_norm bind pose) and MBN joints are both exported exactly as
+    // recorded. There is no mesh↔skeleton scale field in the files; do not invent
+    // AABB/fit transforms (they shift the armature relative to the mesh).
+    // Matches StudioEleven and tools/age_gltf_tool.py.
     let export_skeleton = &scene.skeleton;
 
     // Recursively ensure a joint node exists, creating parents first.
@@ -410,24 +382,14 @@ pub fn export_scene(
         let entry = &scene.meshes[mesh_index];
         let mesh = &entry.mesh;
 
-        // When skins are present, lift mesh positions into MBN/skeleton space
-        // using the transform derived from recorded MBN head bounds.
-        let apply_mesh_space = export_skins_any
-            && ((mesh_space_scale - 1.0).abs() > 1e-8
-                || mesh_space_translation.iter().any(|v| v.abs() > 1e-8));
         let mut positions: Vec<f32> = Vec::with_capacity(mesh.positions.len() * 3);
         let mut min = [f32::INFINITY; 3];
         let mut max = [f32::NEG_INFINITY; 3];
         for p in &mesh.positions {
-            let q = if apply_mesh_space {
-                mbn::transform_point(mesh_space_scale, mesh_space_translation, *p)
-            } else {
-                *p
-            };
-            positions.extend_from_slice(&q);
+            positions.extend_from_slice(p);
             for axis in 0..3 {
-                min[axis] = min[axis].min(q[axis]);
-                max[axis] = max[axis].max(q[axis]);
+                min[axis] = min[axis].min(p[axis]);
+                max[axis] = max[axis].max(p[axis]);
             }
         }
 
@@ -610,12 +572,10 @@ pub fn export_scene(
                     "semantic": if scene.skeleton.is_empty() {
                         "identity bind skin for static weight preservation"
                     } else {
-                        "MBN bind skin; mesh positions aligned to MBN head AABB"
+                        "MBN bind skin for static weight preservation"
                     },
                     "node_hashes": mesh.node_hashes,
                     "missing_mbn_node_hashes": missing_for_mesh,
-                    "mesh_to_skeleton_scale": mesh_space_scale,
-                    "mesh_to_skeleton_translation": mesh_space_translation,
                 }
             }));
             skin_index = Some(skins_json.len() - 1);
@@ -748,11 +708,10 @@ pub fn export_scene(
             "extras": {
                 "source_archive": scene.archive_name,
                 "note": "Static bind-pose export; animation data is not executed.",
-                "joint_nodes": "MBN bind nodes when available; missing hashes use identity.",
+                "joint_nodes": "MBN bind SRT when available; missing hashes use identity.",
+                "coordinate_spaces": "Mesh positions are XPVB bind pose as decoded; joint matrices are pure MBN SRT. No invented mesh↔skeleton scale.",
                 "mbn_bone_count": scene.skeleton.bone_count(),
                 "skin_count": skins_json.len(),
-                "mesh_to_skeleton_scale": mesh_space_scale,
-                "mesh_to_skeleton_translation": mesh_space_translation,
             }
         }),
     );

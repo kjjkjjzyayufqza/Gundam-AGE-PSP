@@ -218,16 +218,20 @@ AGE PSP character packages use the **full 168-byte** StudioEleven layout
 
 Important:
 
-- XPVB skinned positions (`s16_norm`) are bind-pose display coordinates in a
-  **compact unit-ish space**.
-- MBN `head` / global bind transforms are in **skeleton units** (often ~10–20×
-  larger on characters).
-- There is **no free-floating magic scale field**; the relationship is the
-  recorded head AABB vs mesh AABB (plus standard skinning
-  `target * inv(bind) * v` for animation).
-- `age_viewer` glTF export keeps pure MBN joints/IBM, and **aligns mesh
-  positions into skeleton space** using MBN head bounds so armature and mesh
-  share one coordinate frame.
+- XPVB skinned positions (`s16_norm` = `i16 / 32768`) are usable bind-pose
+  display coordinates in a **compact unit-ish space** (character height ≈ 1).
+- MBN local SRT builds hierarchical bind matrices. On AGE PSP characters the
+  hierarchical global translation matches the recorded absolute `head` at
+  `0x9C` when the rotation matrix is converted **without** StudioEleven’s
+  Blender quaternion invert (file ground truth).
+- MBN skeleton units are larger than s16 mesh units (~10–20× on characters).
+  There is **no free-floating mesh↔skeleton scale field** in the package.
+  Invented AABB/center fits misalign the armature (typical symptom: bones
+  shifted forward / up relative to the mesh).
+- `age_viewer` glTF export matches StudioEleven / `age_gltf_tool.py`: mesh
+  positions as decoded, pure MBN joint matrices + IBM, no fit transform.
+  Rest-pose skinning is identity (`target == bind`), so mesh appearance is
+  stable; armature display size follows skeleton units.
 - Unweighted static maps may still contain `.mbn` members; export only emits
   skins when meshes carry node hashes + weights.
 

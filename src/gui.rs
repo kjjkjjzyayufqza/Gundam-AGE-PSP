@@ -65,12 +65,17 @@ const MAX_REPORTED_FAILURES: usize = 12;
 
 /// Launch the viewer window.
 pub fn run_native() -> eframe::Result<()> {
+    // eframe's default egui "e" mark — same asset embedded into the .exe via build.rs.
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
+        .expect("bundled assets/icon.png must be a valid PNG");
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(WINDOW_TITLE)
             .with_inner_size(DEFAULT_WINDOW)
             .with_min_inner_size(MIN_WINDOW)
-            .with_clamp_size_to_monitor_size(true),
+            .with_clamp_size_to_monitor_size(true)
+            .with_icon(icon),
         ..Default::default()
     };
     eframe::run_native(

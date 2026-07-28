@@ -18,10 +18,16 @@
 //! 0x9C  vec3 head  (absolute bind-pose joint position, recorded in file)
 //! ```
 //!
-//! Skinned mesh positions (XPVB s16_norm) are bind-pose display coordinates in a
-//! compact unit-ish space. MBN `head` / global bind transforms live in skeleton
-//! units. glTF export aligns the mesh into skeleton space using these recorded
-//! head positions — it does not invent a free-floating scale factor.
+//! Bind matrices are built from local SRT only. On AGE PSP character packages the
+//! hierarchical global translation matches the recorded `head` when the file
+//! rotation matrix is converted **without** StudioEleven's Blender-side
+//! quaternion invert (verified on `ms001000_p000`: mean |head−gT| ≈ 0 with no
+//! invert, ~0.15 / max ~3 with invert).
+//!
+//! XPVB skinned positions (`s16_norm`) stay in their compact unit-ish bind-pose
+//! space. There is **no** free-floating mesh↔skeleton scale field in the files;
+//! do not invent AABB fits. Static export keeps both spaces as recorded
+//! (StudioEleven / `age_gltf_tool.py` do the same).
 
 use std::collections::HashMap;
 
@@ -157,76 +163,17 @@ impl Skeleton {
             .filter(|p| self.bones.contains_key(*p))
     }
 
-    /// Axis-aligned bounds of recorded head positions (preferred) or global translations.
-    pub fn bind_position_bounds(&self) -> Option<([f32; 3], [f32; 3])> {
-        let mut min = [f32::INFINITY; 3];
-        let mut max = [f32::NEG_INFINITY; 3];
-        let mut any = false;
-        for bone in self.bones.values() {
-            // Prefer non-zero heads; fall back to global translation.
-            let t = if bone.head[0].abs() + bone.head[1].abs() + bone.head[2].abs() > 1e-8 {
-                bone.head
-            } else if let Some(g) = self.global.get(&bone.hash) {
-                [g[3], g[7], g[11]]
-            } else {
-                continue;
-            };
-            any = true;
-            for i in 0..3 {
-                min[i] = min[i].min(t[i]);
-                max[i] = max[i].max(t[i]);
+    /// Absolute bind translation for a bone: recorded `head` when present, else
+    /// hierarchical global translation.
+    pub fn bind_translation(&self, hash: &str) -> Option<[f32; 3]> {
+        let key = hash.to_ascii_uppercase();
+        if let Some(bone) = self.bones.get(&key) {
+            if bone.head[0].abs() + bone.head[1].abs() + bone.head[2].abs() > 1e-8 {
+                return Some(bone.head);
             }
         }
-        any.then_some((min, max))
+        self.global.get(&key).map(|g| [g[3], g[7], g[11]])
     }
-}
-
-/// Uniform scale + translation that maps `from` AABB into `to` AABB
-/// (centers aligned, longest side matched).
-///
-/// `p' = scale * p + translation`.
-pub fn aabb_align_transform(
-    from_min: [f32; 3],
-    from_max: [f32; 3],
-    to_min: [f32; 3],
-    to_max: [f32; 3],
-) -> (f32, [f32; 3]) {
-    let from_c = [
-        0.5 * (from_min[0] + from_max[0]),
-        0.5 * (from_min[1] + from_max[1]),
-        0.5 * (from_min[2] + from_max[2]),
-    ];
-    let to_c = [
-        0.5 * (to_min[0] + to_max[0]),
-        0.5 * (to_min[1] + to_max[1]),
-        0.5 * (to_min[2] + to_max[2]),
-    ];
-    let from_e = (from_max[0] - from_min[0])
-        .max(from_max[1] - from_min[1])
-        .max(from_max[2] - from_min[2])
-        .max(0.0);
-    let to_e = (to_max[0] - to_min[0])
-        .max(to_max[1] - to_min[1])
-        .max(to_max[2] - to_min[2])
-        .max(0.0);
-    if from_e < 1e-6 || to_e < 1e-6 {
-        return (1.0, [0.0, 0.0, 0.0]);
-    }
-    let scale = (to_e / from_e).clamp(1e-4, 1e4);
-    let translation = [
-        to_c[0] - scale * from_c[0],
-        to_c[1] - scale * from_c[1],
-        to_c[2] - scale * from_c[2],
-    ];
-    (scale, translation)
-}
-
-pub fn transform_point(scale: f32, translation: [f32; 3], p: [f32; 3]) -> [f32; 3] {
-    [
-        scale * p[0] + translation[0],
-        scale * p[1] + translation[1],
-        scale * p[2] + translation[2],
-    ]
 }
 
 /// Parse one `.mbn` file body.
@@ -265,10 +212,11 @@ pub fn parse_mbn(data: &[u8]) -> Option<Bone> {
         f32_at(data, 0x34)?,
         f32_at(data, 0x38)?,
     ];
+    // File stores 9 floats in the same column-reordered layout as age_pose_export.
+    // Do NOT invert the quaternion: inverted quats make hierarchical translations
+    // diverge from the recorded absolute head (file ground truth at 0x9C).
     let rotation_matrix3 = [f[0], f[3], f[6], f[1], f[4], f[7], f[2], f[5], f[8]];
     let rotation = matrix3_to_quaternion(rotation_matrix3);
-    // StudioEleven / Blender mbn.py invert the quaternion when building pose.
-    let rotation = quat_inverse(rotation);
     let scale = [
         f32_at(data, 0x3C)?,
         f32_at(data, 0x40)?,
@@ -311,15 +259,6 @@ pub fn parse_mbn(data: &[u8]) -> Option<Bone> {
 fn f32_at(data: &[u8], offset: usize) -> Option<f32> {
     let bytes: [u8; 4] = data.get(offset..offset + 4)?.try_into().ok()?;
     Some(f32::from_le_bytes(bytes))
-}
-
-fn quat_inverse(q: [f32; 4]) -> [f32; 4] {
-    let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
-    let len_sq = x * x + y * y + z * z + w * w;
-    if len_sq <= 1e-12 {
-        return [0.0, 0.0, 0.0, 1.0];
-    }
-    [-x / len_sq, -y / len_sq, -z / len_sq, w / len_sq]
 }
 
 pub fn mat4_mul(a: Mat4, b: Mat4) -> Mat4 {
@@ -603,18 +542,28 @@ mod tests {
     }
 
     #[test]
-    fn aabb_align_maps_centers_and_extent() {
-        let (s, t) = aabb_align_transform(
-            [0.0, 0.0, 0.0],
-            [1.0, 1.0, 1.0],
-            [0.0, 0.0, 0.0],
-            [10.0, 10.0, 10.0],
-        );
-        assert!((s - 10.0).abs() < 1e-4);
-        // center 0.5 -> 5: t = 5 - 10*0.5 = 0
-        assert!(t[0].abs() < 1e-4);
-        let p = transform_point(s, t, [0.5, 0.5, 0.5]);
-        assert!((p[0] - 5.0).abs() < 1e-4);
+    fn hierarchical_global_translation_matches_recorded_head() {
+        // Parent at (0, 10, 0), child local (2, 0, 0) → head (2, 10, 0).
+        let parent = sample_mbn_bytes(0x11111111, 0, 10.0, [0.0, 10.0, 0.0]);
+        let mut child = sample_mbn_bytes(0x22222222, 0x11111111, 0.0, [2.0, 10.0, 0.0]);
+        // child local location = (2, 0, 0)
+        child[0x0C..0x10].copy_from_slice(&2.0f32.to_le_bytes());
+        child[0x10..0x14].copy_from_slice(&0.0f32.to_le_bytes());
+        child[0x14..0x18].copy_from_slice(&0.0f32.to_le_bytes());
+
+        let skeleton = Skeleton::from_mbn_members([
+            ("000.mbn", parent.as_slice()),
+            ("001.mbn", child.as_slice()),
+        ]);
+        let g = skeleton.global.get("22222222").expect("child global");
+        let t = [g[3], g[7], g[11]];
+        let head = skeleton.bones["22222222"].head;
+        for i in 0..3 {
+            assert!(
+                (t[i] - head[i]).abs() < 1e-4,
+                "axis {i}: global {t:?} vs head {head:?}"
+            );
+        }
     }
 
     #[test]
