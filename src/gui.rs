@@ -777,12 +777,23 @@ impl AgeViewerApp {
             let package_dir = export_fmt::package_dir_from_name(&plan.out_dir, &scene.archive_name);
             match export_fmt::export_scene(scene, &package_dir, &name, options) {
                 Ok(summary) => {
+                    let skin_note = if summary.skin_count > 0 {
+                        format!(
+                            ", {} skins, {} joints, {} MBN bones",
+                            theme::format_count(summary.skin_count),
+                            theme::format_count(summary.joint_node_count),
+                            theme::format_count(summary.mbn_bone_count),
+                        )
+                    } else {
+                        String::new()
+                    };
                     self.status = Status::ok(format!(
-                        "Exported {} ({}) — {} meshes, {} vertices → {}",
+                        "Exported {} ({}) — {} meshes, {} vertices{} → {}",
                         scene.archive_name,
                         plan.format.short_label(),
                         theme::format_count(summary.mesh_count),
                         theme::format_count(summary.vertex_count),
+                        skin_note,
                         summary.primary_path.display()
                     ));
                 }

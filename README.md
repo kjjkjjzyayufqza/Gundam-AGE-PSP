@@ -317,7 +317,14 @@ extension for batch exports):
   age_viewer_export_report.json   # batch only
 ```
 
-Geometry is the decoded bind pose; animation is not executed.
+Geometry is the decoded bind pose; animation is not executed. When the archive
+has MBN bones and XMPR weights, **glTF export includes**:
+
+- joint nodes (`joint_<hash>`) from MBN bind transforms
+- one `skin` per weighted mesh with inverse bind matrices
+- `JOINTS_0` / `WEIGHTS_0` (and `_1` when a vertex has more than four influences)
+
+OBJ export remains static geometry + MTL + textures (no skins).
 
 ### Capture a UI screenshot
 

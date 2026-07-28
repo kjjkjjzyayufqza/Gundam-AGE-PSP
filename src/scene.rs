@@ -1,7 +1,7 @@
 //! Turns one XPCK archive into a previewable/exportable scene:
-//! decoded meshes, decoded textures, and the material bindings that link them.
+//! decoded meshes, decoded textures, material bindings, and MBN skeleton data.
 
-use crate::{imgp, material, xmpr, xpck};
+use crate::{imgp, material, mbn, xmpr, xpck};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -36,6 +36,8 @@ pub struct Scene {
     pub meshes: Vec<SceneMesh>,
     pub textures: Vec<SceneTexture>,
     pub bindings: material::Bindings,
+    /// Bind-pose skeleton assembled from every `.mbn` member (may be empty).
+    pub skeleton: mbn::Skeleton,
     pub mesh_failures: Vec<DecodeFailure>,
     pub texture_failures: Vec<DecodeFailure>,
     /// Extension -> member count, for the inspector.
@@ -63,6 +65,11 @@ impl Scene {
 
     pub fn is_skinned(&self) -> bool {
         self.meshes.iter().any(|m| m.mesh.is_skinned())
+    }
+
+    /// Number of `.mbn` bones loaded for this archive.
+    pub fn bone_count(&self) -> usize {
+        self.skeleton.bone_count()
     }
 
     pub fn texture(&self, index: usize) -> Option<&SceneTexture> {
@@ -194,6 +201,18 @@ impl Scene {
             bounds_max = [0.0; 3];
         }
 
+        // Load every .mbn as a bind-pose bone (first name wins on hash collision).
+        let mbn_members: Vec<(&str, &[u8])> = archive
+            .entries_with_extension("mbn")
+            .into_iter()
+            .filter_map(|entry| {
+                archive
+                    .member(entry.index)
+                    .map(|data| (entry.name.as_str(), data))
+            })
+            .collect();
+        let skeleton = mbn::Skeleton::from_mbn_members(mbn_members);
+
         Self {
             archive_path: archive.path.clone(),
             archive_name,
@@ -202,6 +221,7 @@ impl Scene {
             meshes,
             textures,
             bindings,
+            skeleton,
             mesh_failures,
             texture_failures,
             member_extensions,
@@ -230,6 +250,7 @@ mod tests {
             meshes: Vec::new(),
             textures: Vec::new(),
             bindings: material::Bindings::default(),
+            skeleton: mbn::Skeleton::default(),
             mesh_failures: Vec::new(),
             texture_failures: Vec::new(),
             member_extensions: Vec::new(),

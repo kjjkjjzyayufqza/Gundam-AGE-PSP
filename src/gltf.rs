@@ -1,8 +1,16 @@
 //! Static glTF 2.0 export for decoded Gundam AGE PSP scenes.
 //!
 //! Writes `<name>.gltf`, `<name>.bin` and a `textures/` folder of PNGs.
-//! Geometry is exported in its decoded bind pose; animation is not executed.
+//! Geometry is the decoded bind pose. When meshes carry XMPR node hashes and
+//! slot-7 weights, the exporter also writes:
+//!
+//! - joint nodes from MBN bind transforms (identity fallback if a hash is missing)
+//! - `skins` with inverse bind matrices
+//! - `JOINTS_0` / `WEIGHTS_0` (and `_1` when more than four influences)
+//!
+//! Animation tracks are not executed.
 
+use crate::mbn::{self, Mat4, IDENTITY};
 use crate::{imgp, scene::Scene};
 use anyhow::{Result, bail};
 use serde_json::{Map, Value, json};
@@ -10,6 +18,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 const COMPONENT_FLOAT: u32 = 5126;
+const COMPONENT_UNSIGNED_BYTE: u32 = 5121;
 const COMPONENT_UNSIGNED_SHORT: u32 = 5123;
 const COMPONENT_UNSIGNED_INT: u32 = 5125;
 const TARGET_ARRAY_BUFFER: u32 = 34962;
@@ -23,6 +32,8 @@ pub struct ExportOptions {
     pub only_visible: bool,
     /// Write bound textures as PNG next to the glTF.
     pub write_textures: bool,
+    /// Write skins, joint nodes, JOINTS/WEIGHTS when mesh weight data is present.
+    pub export_skins: bool,
 }
 
 impl Default for ExportOptions {
@@ -30,6 +41,7 @@ impl Default for ExportOptions {
         Self {
             only_visible: false,
             write_textures: true,
+            export_skins: true,
         }
     }
 }
@@ -44,6 +56,11 @@ pub struct ExportSummary {
     pub material_count: usize,
     pub texture_count: usize,
     pub skipped_meshes: usize,
+    pub skin_count: usize,
+    pub joint_node_count: usize,
+    pub weighted_vertex_count: usize,
+    pub mbn_bone_count: usize,
+    pub missing_mbn_joint_count: usize,
 }
 
 /// Accumulates the binary buffer plus bufferView/accessor tables.
@@ -120,10 +137,22 @@ fn pack_f32(values: &[f32]) -> Vec<u8> {
     out
 }
 
+fn pack_u8(values: &[u16]) -> Vec<u8> {
+    values.iter().map(|v| *v as u8).collect()
+}
+
 fn pack_u16(values: &[u32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(values.len() * 2);
     for v in values {
         out.extend_from_slice(&(*v as u16).to_le_bytes());
+    }
+    out
+}
+
+fn pack_u16_from_u16(values: &[u16]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(values.len() * 2);
+    for v in values {
+        out.extend_from_slice(&v.to_le_bytes());
     }
     out
 }
@@ -157,7 +186,13 @@ pub fn sanitize(name: &str, fallback: &str) -> String {
     }
 }
 
-/// Export a decoded scene as static glTF 2.0.
+fn mesh_has_exportable_weights(mesh: &crate::xmpr::Mesh) -> bool {
+    mesh.is_skinned()
+        && mesh.raw_weights.len() == mesh.positions.len()
+        && !mesh.node_hashes.is_empty()
+}
+
+/// Export a decoded scene as static glTF 2.0 (optionally with skins).
 pub fn export_scene(
     scene: &Scene,
     out_dir: &Path,
@@ -222,28 +257,177 @@ pub fn export_scene(
     let mut materials_json: Vec<Value> = Vec::new();
     let mut images_json: Vec<Value> = Vec::new();
     let mut textures_json: Vec<Value> = Vec::new();
+    let mut skins_json: Vec<Value> = Vec::new();
 
     let mut image_index_by_uri: HashMap<String, usize> = HashMap::new();
     let mut texture_index_by_uri: HashMap<String, usize> = HashMap::new();
     let mut material_index_by_key: HashMap<String, usize> = HashMap::new();
 
+    // Joint node index by uppercase node hash (shared across skins).
+    let mut joint_node_by_hash: HashMap<String, usize> = HashMap::new();
+    let mut missing_mbn_joints: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+
     let mut total_vertices = 0usize;
     let mut total_faces = 0usize;
+    let mut weighted_vertex_count = 0usize;
+
+    // Mesh vertices (often s16_norm bind pose) and MBN joints live in different
+    // recorded unit systems. Align mesh AABB → MBN head AABB so the exported
+    // geometry sits in the same space as the file-recorded skeleton. Joint
+    // matrices stay pure MBN (no invented bone scaling).
+    let mut mesh_min = [f32::INFINITY; 3];
+    let mut mesh_max = [f32::NEG_INFINITY; 3];
+    for &mesh_index in &selected {
+        for p in &scene.meshes[mesh_index].mesh.positions {
+            for axis in 0..3 {
+                mesh_min[axis] = mesh_min[axis].min(p[axis]);
+                mesh_max[axis] = mesh_max[axis].max(p[axis]);
+            }
+        }
+    }
+    if !mesh_min[0].is_finite() {
+        mesh_min = [0.0; 3];
+        mesh_max = [0.0; 3];
+    }
+    let export_skins_any = options.export_skins
+        && selected
+            .iter()
+            .any(|&i| mesh_has_exportable_weights(&scene.meshes[i].mesh));
+    let (mesh_space_scale, mesh_space_translation) =
+        if export_skins_any {
+            if let Some((bone_min, bone_max)) = scene.skeleton.bind_position_bounds() {
+                mbn::aabb_align_transform(mesh_min, mesh_max, bone_min, bone_max)
+            } else {
+                (1.0, [0.0, 0.0, 0.0])
+            }
+        } else {
+            (1.0, [0.0, 0.0, 0.0])
+        };
+    let export_skeleton = &scene.skeleton;
+
+    // Recursively ensure a joint node exists, creating parents first.
+    // Returns the node index in `nodes_json`.
+    let ensure_joint = |hash: &str,
+                        nodes_json: &mut Vec<Value>,
+                        root_nodes: &mut Vec<usize>,
+                        joint_node_by_hash: &mut HashMap<String, usize>,
+                        missing: &mut std::collections::HashSet<String>,
+                        skeleton: &mbn::Skeleton|
+     -> usize {
+        fn ensure_inner(
+            hash: &str,
+            nodes_json: &mut Vec<Value>,
+            root_nodes: &mut Vec<usize>,
+            joint_node_by_hash: &mut HashMap<String, usize>,
+            missing: &mut std::collections::HashSet<String>,
+            skeleton: &mbn::Skeleton,
+            visiting: &mut std::collections::HashSet<String>,
+        ) -> usize {
+            let key = hash.to_ascii_uppercase();
+            if let Some(&index) = joint_node_by_hash.get(&key) {
+                return index;
+            }
+            if !visiting.insert(key.clone()) {
+                // Cycle: emit identity root joint.
+                let index = nodes_json.len();
+                nodes_json.push(json!({
+                    "name": format!("joint_{key}"),
+                    "matrix": mbn::gltf_column_major(IDENTITY).to_vec(),
+                    "extras": { "node_hash": key, "source": "cycle fallback" }
+                }));
+                joint_node_by_hash.insert(key.clone(), index);
+                root_nodes.push(index);
+                return index;
+            }
+
+            let parent_hash = skeleton.parent_of(&key).map(|s| s.to_string());
+            let parent_index = parent_hash.as_ref().map(|p| {
+                ensure_inner(
+                    p,
+                    nodes_json,
+                    root_nodes,
+                    joint_node_by_hash,
+                    missing,
+                    skeleton,
+                    visiting,
+                )
+            });
+
+            let in_mbn = skeleton.bones.contains_key(&key);
+            if !in_mbn {
+                missing.insert(key.clone());
+            }
+            let local: Mat4 = skeleton.local_matrix(&key);
+            let source = if in_mbn {
+                "MBN bind pose"
+            } else {
+                "XMPR node table identity fallback"
+            };
+
+            let index = nodes_json.len();
+            nodes_json.push(json!({
+                "name": format!("joint_{key}"),
+                "matrix": mbn::gltf_column_major(local).to_vec(),
+                "extras": {
+                    "node_hash": key,
+                    "source": source,
+                }
+            }));
+            joint_node_by_hash.insert(key.clone(), index);
+
+            if let Some(parent_index) = parent_index {
+                let parent = nodes_json[parent_index]
+                    .as_object_mut()
+                    .expect("joint node object");
+                let children = parent
+                    .entry("children".to_string())
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Value::Array(list) = children {
+                    list.push(json!(index));
+                }
+            } else {
+                root_nodes.push(index);
+            }
+
+            visiting.remove(&key);
+            index
+        }
+
+        let mut visiting = std::collections::HashSet::new();
+        ensure_inner(
+            hash,
+            nodes_json,
+            root_nodes,
+            joint_node_by_hash,
+            missing,
+            skeleton,
+            &mut visiting,
+        )
+    };
 
     for &mesh_index in &selected {
         let entry = &scene.meshes[mesh_index];
         let mesh = &entry.mesh;
 
+        // When skins are present, lift mesh positions into MBN/skeleton space
+        // using the transform derived from recorded MBN head bounds.
+        let apply_mesh_space = export_skins_any
+            && ((mesh_space_scale - 1.0).abs() > 1e-8
+                || mesh_space_translation.iter().any(|v| v.abs() > 1e-8));
         let mut positions: Vec<f32> = Vec::with_capacity(mesh.positions.len() * 3);
-        for p in &mesh.positions {
-            positions.extend_from_slice(p);
-        }
         let mut min = [f32::INFINITY; 3];
         let mut max = [f32::NEG_INFINITY; 3];
         for p in &mesh.positions {
+            let q = if apply_mesh_space {
+                mbn::transform_point(mesh_space_scale, mesh_space_translation, *p)
+            } else {
+                *p
+            };
+            positions.extend_from_slice(&q);
             for axis in 0..3 {
-                min[axis] = min[axis].min(p[axis]);
-                max[axis] = max[axis].max(p[axis]);
+                min[axis] = min[axis].min(q[axis]);
+                max[axis] = max[axis].max(q[axis]);
             }
         }
 
@@ -297,6 +481,144 @@ pub fn export_scene(
                     None,
                 )),
             );
+        }
+
+        let mut skin_index: Option<usize> = None;
+        if options.export_skins && mesh_has_exportable_weights(mesh) {
+            let (joints_0, weights_0, set1, _max_inf) =
+                mbn::build_joint_weight_sets(&mesh.raw_weights, mesh.node_hashes.len());
+
+            weighted_vertex_count += mesh
+                .raw_weights
+                .iter()
+                .filter(|w| w.iter().any(|&b| b != 0))
+                .count();
+
+            let joint_component = if mesh.node_hashes.len() <= 255 {
+                COMPONENT_UNSIGNED_BYTE
+            } else {
+                COMPONENT_UNSIGNED_SHORT
+            };
+
+            let joints_payload = if joint_component == COMPONENT_UNSIGNED_BYTE {
+                pack_u8(&joints_0)
+            } else {
+                pack_u16_from_u16(&joints_0)
+            };
+            attributes.insert(
+                "JOINTS_0".to_string(),
+                json!(buffer.add_accessor(
+                    &joints_payload,
+                    joint_component,
+                    "VEC4",
+                    mesh.positions.len(),
+                    Some(TARGET_ARRAY_BUFFER),
+                    None,
+                    None,
+                )),
+            );
+            attributes.insert(
+                "WEIGHTS_0".to_string(),
+                json!(buffer.add_accessor(
+                    &pack_f32(&weights_0),
+                    COMPONENT_FLOAT,
+                    "VEC4",
+                    mesh.positions.len(),
+                    Some(TARGET_ARRAY_BUFFER),
+                    None,
+                    None,
+                )),
+            );
+
+            if let Some((joints_1, weights_1)) = set1 {
+                let joints_payload = if joint_component == COMPONENT_UNSIGNED_BYTE {
+                    pack_u8(&joints_1)
+                } else {
+                    pack_u16_from_u16(&joints_1)
+                };
+                attributes.insert(
+                    "JOINTS_1".to_string(),
+                    json!(buffer.add_accessor(
+                        &joints_payload,
+                        joint_component,
+                        "VEC4",
+                        mesh.positions.len(),
+                        Some(TARGET_ARRAY_BUFFER),
+                        None,
+                        None,
+                    )),
+                );
+                attributes.insert(
+                    "WEIGHTS_1".to_string(),
+                    json!(buffer.add_accessor(
+                        &pack_f32(&weights_1),
+                        COMPONENT_FLOAT,
+                        "VEC4",
+                        mesh.positions.len(),
+                        Some(TARGET_ARRAY_BUFFER),
+                        None,
+                        None,
+                    )),
+                );
+            }
+
+            let mut joint_nodes = Vec::with_capacity(mesh.node_hashes.len());
+            for node_hash in &mesh.node_hashes {
+                let index = ensure_joint(
+                    node_hash,
+                    &mut nodes_json,
+                    &mut root_nodes,
+                    &mut joint_node_by_hash,
+                    &mut missing_mbn_joints,
+                    export_skeleton,
+                );
+                joint_nodes.push(index);
+            }
+
+            let mut inverse_bind: Vec<f32> = Vec::with_capacity(mesh.node_hashes.len() * 16);
+            for node_hash in &mesh.node_hashes {
+                let ibm = export_skeleton.inverse_bind_matrix(node_hash);
+                inverse_bind.extend_from_slice(&mbn::gltf_column_major(ibm));
+            }
+            let ibm_accessor = buffer.add_accessor(
+                &pack_f32(&inverse_bind),
+                COMPONENT_FLOAT,
+                "MAT4",
+                mesh.node_hashes.len(),
+                None,
+                None,
+                None,
+            );
+
+            let missing_for_mesh: Vec<String> = mesh
+                .node_hashes
+                .iter()
+                .filter(|h| !export_skeleton.bones.contains_key(&h.to_ascii_uppercase()))
+                .cloned()
+                .collect();
+
+            let skin_name = format!(
+                "{}_skin",
+                sanitize(&mesh.name, &format!("mesh_{mesh_index}"))
+            );
+            skins_json.push(json!({
+                "name": skin_name,
+                "joints": joint_nodes,
+                "inverseBindMatrices": ibm_accessor,
+                "extras": {
+                    "source": "XMPR node hashes",
+                    "semantic": if scene.skeleton.is_empty() {
+                        "identity bind skin for static weight preservation"
+                    } else {
+                        "MBN bind skin; mesh positions aligned to MBN head AABB"
+                    },
+                    "node_hashes": mesh.node_hashes,
+                    "missing_mbn_node_hashes": missing_for_mesh,
+                    "mesh_to_skeleton_scale": mesh_space_scale,
+                    "mesh_to_skeleton_translation": mesh_space_translation,
+                }
+            }));
+            skin_index = Some(skins_json.len() - 1);
         }
 
         // One glTF material per (material name, bound texture) pair.
@@ -399,12 +721,21 @@ pub fn export_scene(
                 "position_format": mesh.position_format.label(),
                 "uv_format": mesh.uv_format.label(),
                 "node_hashes": mesh.node_hashes,
+                "skinned": skin_index.is_some(),
             }
         }));
-        nodes_json.push(json!({
-            "name": node_name,
-            "mesh": meshes_json.len() - 1,
-        }));
+
+        let mut mesh_node = Map::new();
+        mesh_node.insert("name".to_string(), json!(node_name));
+        mesh_node.insert("mesh".to_string(), json!(meshes_json.len() - 1));
+        if let Some(skin) = skin_index {
+            mesh_node.insert("skin".to_string(), json!(skin));
+        }
+        mesh_node.insert(
+            "extras".to_string(),
+            json!({ "source_member": mesh.source }),
+        );
+        nodes_json.push(Value::Object(mesh_node));
         root_nodes.push(nodes_json.len() - 1);
     }
 
@@ -417,6 +748,11 @@ pub fn export_scene(
             "extras": {
                 "source_archive": scene.archive_name,
                 "note": "Static bind-pose export; animation data is not executed.",
+                "joint_nodes": "MBN bind nodes when available; missing hashes use identity.",
+                "mbn_bone_count": scene.skeleton.bone_count(),
+                "skin_count": skins_json.len(),
+                "mesh_to_skeleton_scale": mesh_space_scale,
+                "mesh_to_skeleton_translation": mesh_space_translation,
             }
         }),
     );
@@ -428,6 +764,9 @@ pub fn export_scene(
     gltf.insert("nodes".to_string(), Value::Array(nodes_json));
     gltf.insert("meshes".to_string(), Value::Array(meshes_json.clone()));
     gltf.insert("materials".to_string(), Value::Array(materials_json.clone()));
+    if !skins_json.is_empty() {
+        gltf.insert("skins".to_string(), Value::Array(skins_json.clone()));
+    }
     gltf.insert(
         "buffers".to_string(),
         json!([{
@@ -461,6 +800,11 @@ pub fn export_scene(
         material_count: materials_json.len(),
         texture_count: textures_json.len(),
         skipped_meshes: scene.meshes.len() - selected.len(),
+        skin_count: skins_json.len(),
+        joint_node_count: joint_node_by_hash.len(),
+        weighted_vertex_count,
+        mbn_bone_count: scene.skeleton.bone_count(),
+        missing_mbn_joint_count: missing_mbn_joints.len(),
     })
 }
 
@@ -480,6 +824,7 @@ mod tests {
         assert_eq!(pack_u16(&[1]), vec![1, 0]);
         assert_eq!(pack_u32(&[1]), vec![1, 0, 0, 0]);
         assert_eq!(pack_f32(&[1.0]), 1.0f32.to_le_bytes().to_vec());
+        assert_eq!(pack_u8(&[1, 2, 255]), vec![1, 2, 255]);
     }
 
     #[test]
@@ -489,5 +834,10 @@ mod tests {
         let second = builder.add_view(&[4, 5, 6, 7], None);
         let offset = builder.views[second]["byteOffset"].as_u64().unwrap();
         assert_eq!(offset % 4, 0);
+    }
+
+    #[test]
+    fn default_options_export_skins() {
+        assert!(ExportOptions::default().export_skins);
     }
 }

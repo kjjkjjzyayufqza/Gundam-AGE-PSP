@@ -44,6 +44,8 @@ struct Counts {
     materials: usize,
     textures: usize,
     skipped: usize,
+    skins: usize,
+    joints: usize,
 }
 
 impl From<&Summary> for Counts {
@@ -55,6 +57,8 @@ impl From<&Summary> for Counts {
             materials: summary.material_count,
             textures: summary.texture_count,
             skipped: summary.skipped_meshes,
+            skins: summary.skin_count,
+            joints: summary.joint_node_count,
         }
     }
 }
@@ -316,6 +320,8 @@ fn report_json(
                 "materials": counts.materials,
                 "textures": counts.textures,
                 "skipped_meshes": counts.skipped,
+                "skins": counts.skins,
+                "joints": counts.joints,
             }),
             Err(error) => json!({
                 "archive": outcome.relative,
@@ -371,6 +377,8 @@ mod tests {
                 materials: 3,
                 textures: 5,
                 skipped: 1,
+                skins: 2,
+                joints: 24,
             }),
         }
     }

@@ -129,6 +129,11 @@ fn archive_summary(ui: &mut egui::Ui, scene: &Scene) {
             );
             widgets::property(
                 ui,
+                "MBN bones",
+                &theme::format_count(scene.bone_count()),
+            );
+            widgets::property(
+                ui,
                 "Material binds",
                 &format!(
                     "{}/{}",

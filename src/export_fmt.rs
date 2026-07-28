@@ -56,6 +56,7 @@ impl Options {
         gltf::ExportOptions {
             only_visible: self.only_visible,
             write_textures: self.write_textures,
+            export_skins: true,
         }
     }
 }
@@ -70,6 +71,10 @@ pub struct Summary {
     pub material_count: usize,
     pub texture_count: usize,
     pub skipped_meshes: usize,
+    pub skin_count: usize,
+    pub joint_node_count: usize,
+    pub weighted_vertex_count: usize,
+    pub mbn_bone_count: usize,
     pub format: Format,
 }
 
@@ -83,6 +88,10 @@ impl From<(gltf::ExportSummary, Format)> for Summary {
             material_count: summary.material_count,
             texture_count: summary.texture_count,
             skipped_meshes: summary.skipped_meshes,
+            skin_count: summary.skin_count,
+            joint_node_count: summary.joint_node_count,
+            weighted_vertex_count: summary.weighted_vertex_count,
+            mbn_bone_count: summary.mbn_bone_count,
             format,
         }
     }

@@ -136,6 +136,11 @@ pub fn export_scene(
         material_count: material_defs.len(),
         texture_count,
         skipped_meshes: scene.meshes.len() - selected.len(),
+        skin_count: 0,
+        joint_node_count: 0,
+        weighted_vertex_count: 0,
+        mbn_bone_count: scene.skeleton.bone_count(),
+        missing_mbn_joint_count: 0,
     })
 }
 

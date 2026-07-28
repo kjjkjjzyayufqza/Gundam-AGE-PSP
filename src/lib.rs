@@ -12,6 +12,7 @@ pub mod imgp;
 pub mod index;
 pub mod level5;
 pub mod material;
+pub mod mbn;
 pub mod obj;
 pub mod render;
 pub mod scene;

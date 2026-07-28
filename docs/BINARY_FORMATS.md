@@ -201,13 +201,35 @@ This is required for human packages such as `hu118300`, where face material
 ## MBN Skeleton / Bind Data
 
 `.mbn` stores skeleton/bind-pose data used by weighted character meshes.
+AGE PSP character packages use the **full 168-byte** StudioEleven layout
+(not the short 0x48 SRT-only form):
 
-Important current rule:
+| Offset | Field |
+|---:|---|
+| `0x00` | `u32` bone name hash |
+| `0x04` | `u32` parent hash (0 = root) |
+| `0x08` | `u32` flags (usually `4`) |
+| `0x0C` | `vec3` local location |
+| `0x18` | `mat3` rotation (9 floats) |
+| `0x3C` | `vec3` scale |
+| `0x48` | `mat3` local rotation |
+| `0x6C`… | helpers (`location×head`, matrix columns, `tail-head`) |
+| `0x9C` | `vec3` **head** (absolute bind-pose joint position) |
 
-- weighted character meshes may need MBN;
-- unweighted static maps skip MBN loading entirely.
+Important:
 
-This avoids false failures on map archives with bad/cyclic MBN data.
+- XPVB skinned positions (`s16_norm`) are bind-pose display coordinates in a
+  **compact unit-ish space**.
+- MBN `head` / global bind transforms are in **skeleton units** (often ~10–20×
+  larger on characters).
+- There is **no free-floating magic scale field**; the relationship is the
+  recorded head AABB vs mesh AABB (plus standard skinning
+  `target * inv(bind) * v` for animation).
+- `age_viewer` glTF export keeps pure MBN joints/IBM, and **aligns mesh
+  positions into skeleton space** using MBN head bounds so armature and mesh
+  share one coordinate frame.
+- Unweighted static maps may still contain `.mbn` members; export only emits
+  skins when meshes carry node hashes + weights.
 
 ## MTN2 Animation
 

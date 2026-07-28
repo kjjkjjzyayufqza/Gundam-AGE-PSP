@@ -258,6 +258,25 @@ fn exporting_a_character_archive_writes_a_valid_gltf() {
     assert!(summary.gltf_path.is_file());
     assert!(summary.bin_path.is_file());
 
+    // Character packages carry MBN bones and weighted meshes.
+    assert!(
+        scene.bone_count() > 0,
+        "ms001000 should load MBN bones, got 0"
+    );
+    assert!(
+        scene.is_skinned(),
+        "ms001000 should decode as skinned (node hashes + weights)"
+    );
+    assert!(
+        summary.skin_count > 0,
+        "export must emit skins for a skinned character (got {})",
+        summary.skin_count
+    );
+    assert!(
+        summary.joint_node_count > 0,
+        "export must emit joint nodes"
+    );
+
     // The glTF must be parseable and internally consistent.
     let text = std::fs::read_to_string(&summary.gltf_path).expect("read gltf");
     let doc: serde_json::Value = serde_json::from_str(&text).expect("gltf must be valid JSON");
@@ -265,6 +284,12 @@ fn exporting_a_character_archive_writes_a_valid_gltf() {
 
     let accessors = doc["accessors"].as_array().expect("accessors array");
     let views = doc["bufferViews"].as_array().expect("bufferViews array");
+    let nodes = doc["nodes"].as_array().expect("nodes array");
+    let skins = doc["skins"]
+        .as_array()
+        .expect("skins array must be present for skinned character export");
+    assert_eq!(skins.len(), summary.skin_count);
+
     let declared = doc["buffers"][0]["byteLength"].as_u64().expect("byteLength");
     let actual = std::fs::metadata(&summary.bin_path).expect("bin metadata").len();
     assert_eq!(
@@ -284,6 +309,7 @@ fn exporting_a_character_archive_writes_a_valid_gltf() {
 
     // Every mesh primitive must have positions and reference a real material.
     let material_count = doc["materials"].as_array().map(|m| m.len()).unwrap_or(0);
+    let mut skinned_primitives = 0usize;
     for mesh in doc["meshes"].as_array().expect("meshes array") {
         for primitive in mesh["primitives"].as_array().expect("primitives array") {
             let position = primitive["attributes"]["POSITION"]
@@ -292,6 +318,71 @@ fn exporting_a_character_archive_writes_a_valid_gltf() {
             assert!((position as usize) < accessors.len());
             let material = primitive["material"].as_u64().expect("material index");
             assert!((material as usize) < material_count);
+            if primitive["attributes"].get("JOINTS_0").is_some() {
+                assert!(
+                    primitive["attributes"].get("WEIGHTS_0").is_some(),
+                    "JOINTS_0 requires WEIGHTS_0"
+                );
+                skinned_primitives += 1;
+            }
+        }
+    }
+    assert!(
+        skinned_primitives > 0,
+        "at least one primitive must carry JOINTS_0/WEIGHTS_0"
+    );
+
+    // Skin joints must reference live nodes and inverse-bind MAT4 accessors.
+    for skin in skins {
+        let joints = skin["joints"].as_array().expect("skin.joints");
+        assert!(!joints.is_empty(), "skin must list joints");
+        for joint in joints {
+            let index = joint.as_u64().expect("joint index") as usize;
+            assert!(index < nodes.len(), "joint {index} out of range");
+        }
+        let ibm = skin["inverseBindMatrices"]
+            .as_u64()
+            .expect("inverseBindMatrices") as usize;
+        assert!(ibm < accessors.len());
+        assert_eq!(accessors[ibm]["type"], "MAT4");
+        assert_eq!(
+            accessors[ibm]["count"].as_u64().unwrap(),
+            joints.len() as u64
+        );
+        // Mesh is lifted into skeleton space using MBN head bounds (file data).
+        let mesh_scale = skin["extras"]["mesh_to_skeleton_scale"]
+            .as_f64()
+            .expect("mesh_to_skeleton_scale");
+        assert!(
+            mesh_scale > 1.0,
+            "character s16 mesh should scale up into MBN head space, got {mesh_scale}"
+        );
+    }
+
+    // Mesh positions should now live in skeleton/head units (not unit-cube).
+    let mut mesh_max_r = 0.0f64;
+    for mesh in doc["meshes"].as_array().expect("meshes") {
+        for prim in mesh["primitives"].as_array().expect("prims") {
+            let pos_acc = prim["attributes"]["POSITION"].as_u64().unwrap() as usize;
+            let max = accessors[pos_acc]["max"].as_array().expect("pos max");
+            let min = accessors[pos_acc]["min"].as_array().expect("pos min");
+            for i in 0..3 {
+                let a = max[i].as_f64().unwrap_or(0.0).abs();
+                let b = min[i].as_f64().unwrap_or(0.0).abs();
+                mesh_max_r = mesh_max_r.max(a).max(b);
+            }
+        }
+    }
+    assert!(
+        mesh_max_r > 5.0,
+        "exported mesh should be in MBN/head units after align, max |coord|={mesh_max_r}"
+    );
+
+    // Mesh nodes that declare a skin index must be in range.
+    for node in nodes {
+        if let Some(skin) = node.get("skin") {
+            let index = skin.as_u64().expect("skin index") as usize;
+            assert!(index < skins.len());
         }
     }
 
@@ -303,9 +394,12 @@ fn exporting_a_character_archive_writes_a_valid_gltf() {
     }
 
     eprintln!(
-        "exported {} meshes / {} vertices / {} textures -> {}",
+        "exported {} meshes / {} verts / {} skins / {} joints / {} MBN bones / {} textures -> {}",
         summary.mesh_count,
         summary.vertex_count,
+        summary.skin_count,
+        summary.joint_node_count,
+        summary.mbn_bone_count,
         summary.texture_count,
         summary.gltf_path.display()
     );
