@@ -1,8 +1,4 @@
 //! Search result caching and the virtualized archive list row.
-//!
-//! `filter_records` over 4,500 records costs ~33 us, which is cheap but still
-//! pointless to repeat 60 times a second, so results are cached and only
-//! recomputed when the filter or the underlying record list actually changed.
 
 use super::widgets;
 use crate::index::{ArchiveRecord, SearchFilter, filter_records};
@@ -10,7 +6,7 @@ use crate::theme;
 use eframe::egui;
 
 /// Height of one result row, in points. Fixed so the list can be virtualized.
-pub const ROW_HEIGHT: f32 = 21.0;
+pub const ROW_HEIGHT: f32 = 20.0;
 
 /// Everything that can invalidate a cached result set.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,10 +95,26 @@ pub fn directory_of(relative: &str) -> &str {
     }
 }
 
+/// Record indices between two anchors in the current match order (inclusive).
+///
+/// Used by Shift+click multi-select. When either anchor is missing from
+/// `matches`, returns only `to` so the click still selects something.
+pub fn range_record_indices(matches: &[usize], from: usize, to: usize) -> Vec<usize> {
+    let a = matches.iter().position(|&r| r == from);
+    let b = matches.iter().position(|&r| r == to);
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+            matches[lo..=hi].to_vec()
+        }
+        _ => vec![to],
+    }
+}
+
 /// Paint one result row and return its interaction response.
 ///
-/// Layout is fixed: name on the left, directory next to it (elided), model and
-/// texture counts right-aligned in monospace.
+/// Layout: name, directory, then model/texture counts. Uses egui selection /
+/// hover fills rather than a custom accent palette.
 pub fn row(
     ui: &mut egui::Ui,
     record: &ArchiveRecord,
@@ -118,32 +130,31 @@ pub fn row(
     }
 
     let painter = ui.painter();
-    let radius = egui::CornerRadius::same(theme::RADIUS_CONTROL);
+    let visuals = ui.visuals();
     if selected {
-        painter.rect_filled(rect, radius, theme::ACCENT_SELECTION);
-        painter.rect_stroke(
-            rect,
-            radius,
-            egui::Stroke::new(1.0_f32, theme::ACCENT),
-            egui::StrokeKind::Inside,
-        );
+        painter.rect_filled(rect, 0.0, visuals.selection.bg_fill);
     } else if response.hovered() {
-        painter.rect_filled(rect, radius, theme::BG_ELEVATED);
+        painter.rect_filled(rect, 0.0, theme::BG_HOVER);
     } else if row_index % 2 == 1 {
-        painter.rect_filled(rect, radius, theme::BG_ROW_ALT);
+        painter.rect_filled(rect, 0.0, theme::BG_ROW_ALT);
     }
 
     let body = widgets::body_font(ui);
     let mono = widgets::mono_font(ui);
     let inner = rect.shrink2(egui::vec2(6.0, 0.0));
+    let text_primary = if selected {
+        visuals.strong_text_color()
+    } else {
+        visuals.text_color()
+    };
+    let text_secondary = visuals.weak_text_color();
 
-    // Counts first: they are fixed width, so the name and path get the rest.
     let counts = format!("{:>3}P {:>3}T", record.prm_count, record.xi_count);
     let counts_galley = widgets::truncated_galley(
         ui,
         &counts,
         mono.clone(),
-        theme::TEXT_SECONDARY,
+        text_secondary,
         inner.width().max(1.0),
     );
     let counts_width = counts_galley.size().x;
@@ -158,7 +169,7 @@ pub fn row(
         ui,
         &record.file_name,
         body.clone(),
-        theme::TEXT_PRIMARY,
+        text_primary,
         name_width,
     );
     let name_pos = egui::pos2(
@@ -171,14 +182,14 @@ pub fn row(
     let dir_width = (counts_pos.x - 8.0 - dir_left).max(0.0);
 
     let painter = ui.painter();
-    painter.galley(name_pos, name_galley, theme::TEXT_PRIMARY);
-    painter.galley(counts_pos, counts_galley, theme::TEXT_SECONDARY);
+    painter.galley(name_pos, name_galley, text_primary);
+    painter.galley(counts_pos, counts_galley, text_secondary);
     if !directory.is_empty() && dir_width > 12.0 {
         let dir_galley =
-            widgets::truncated_galley(ui, directory, mono, theme::TEXT_SECONDARY, dir_width);
+            widgets::truncated_galley(ui, directory, mono, text_secondary, dir_width);
         let dir_pos = egui::pos2(dir_left, inner.center().y - dir_galley.size().y * 0.5);
         ui.painter()
-            .galley(dir_pos, dir_galley, theme::TEXT_SECONDARY);
+            .galley(dir_pos, dir_galley, text_secondary);
     }
 
     response
@@ -301,5 +312,19 @@ mod tests {
         assert_eq!(directory_of("chr/ms001000/a.xc"), "chr/ms001000");
         assert_eq!(directory_of("top.xc"), "");
         assert_eq!(directory_of(""), "");
+    }
+
+    #[test]
+    fn range_record_indices_selects_inclusive_span_in_match_order() {
+        let matches = vec![10, 20, 30, 40, 50];
+        assert_eq!(range_record_indices(&matches, 20, 40), vec![20, 30, 40]);
+        assert_eq!(range_record_indices(&matches, 40, 20), vec![20, 30, 40]);
+        assert_eq!(range_record_indices(&matches, 10, 10), vec![10]);
+    }
+
+    #[test]
+    fn range_record_indices_falls_back_when_anchor_is_missing() {
+        let matches = vec![1, 2, 3];
+        assert_eq!(range_record_indices(&matches, 99, 2), vec![2]);
     }
 }

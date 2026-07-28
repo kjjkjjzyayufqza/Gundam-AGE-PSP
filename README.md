@@ -9,7 +9,7 @@ resources.
 
 ## What This Project Does
 
-Reproducible static extraction pipeline:
+Reproducible static extraction pipeline, plus a desktop viewer:
 
 ```text
 Already-unpacked PSP resource tree
@@ -18,6 +18,7 @@ Already-unpacked PSP resource tree
   -> IMGP/XI textures converted to PNG
   -> XMPR/PRM meshes exported to OBJ + MTL + glTF
   -> JSON/Markdown index and validation reports
+  -> age_viewer (egui): browse, preview, batch export
 ```
 
 Current status:
@@ -28,7 +29,9 @@ Current status:
 - IMGP `.xi` texture export defaults to PSP 16-byte x 8-row deswizzle;
 - remaining high-priority map gaps are mostly material-to-texture binding misses
   on large maps, not global texture decode failure;
-- an archive-level model/texture index exists under `outputs/manifests/`.
+- an archive-level model/texture index exists under `outputs/manifests/`;
+- `age_viewer` browses the tree, previews meshes/textures, and exports glTF or
+  OBJ packages (with textures) via a confirmation list.
 
 ## Table of Contents
 
@@ -36,6 +39,7 @@ Current status:
 
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
+- [GUI Viewer (`age_viewer`)](#gui-viewer-age_viewer)
 - [One-Command Tool: `age_start.py`](#one-command-tool-age_startpy)
 - [Manual Stage Commands](#manual-stage-commands)
 - [Tool Layout](#tool-layout)
@@ -63,6 +67,7 @@ python -m pip install pillow
 
 Optional:
 
+- Rust toolchain (edition 2024) for `age_viewer` and the format library.
 - Chrome/Edge for HTML viewer screenshots.
 - .NET 9 only if you rebuild the optional local XMTN animation probe.
 
@@ -199,7 +204,9 @@ The Rust viewer is the root crate. Core reusable Python tools are flat in
 
 | Path | Purpose |
 |---|---|
-| `Cargo.toml`, `src/` | `age_viewer` GUI: search, 3D/texture preview, glTF export |
+| `Cargo.toml`, `src/` | `age_viewer` GUI + format library: search, preview, glTF/OBJ export |
+| `docs/screenshots/` | UI screenshots for documentation |
+| `capture_ui.ps1` | Windows helper to capture the viewer window |
 | `tests/real_resource_tree.rs` | Opt-in checks against a real resource tree |
 | `tools/age_start.py` | Main user-facing entry point for the Python pipeline |
 | `tools/` | Core archive, texture, model, material, pipeline, and index modules |
@@ -211,12 +218,18 @@ Detailed tool notes: [docs/TOOLING.md](docs/TOOLING.md).
 
 ## GUI Viewer (`age_viewer`)
 
-A desktop viewer for browsing the unpacked resource tree, previewing models and
-textures, and exporting models to glTF. It is read-only: there is no repack or
-write-back path.
+Desktop tool for browsing an unpacked resource tree, previewing models and
+textures, and exporting static packages. Read-only: no repack or write-back.
+
+![age_viewer main window](docs/screenshots/age_viewer_main.png)
+
+*Search (left), wgpu viewport (centre), archive inspector (right). Stock egui
+dark chrome; multi-select and right-click export on the result list.*
+
+### Build and run
 
 Requires a Rust toolchain (edition 2024) and a GPU backend (DirectX 12 or
-Vulkan).
+Vulkan on Windows).
 
 ```powershell
 cargo run --release
@@ -225,18 +238,100 @@ cargo run --release
 Use `--release`. A debug build indexes the tree roughly sixty times slower
 because the Level-5 decoders are byte-at-a-time.
 
-Workflow:
+Library unit tests (no game data required):
 
-1. `File > Open resource root` and pick the unpacked `psp` directory. The root is
-   remembered and re-indexed on the next launch.
-2. Search by name or path. Filter with `Has models` / `Has textures` and the
-   `Area` selector.
-3. Click a result to preview it. Left-drag orbits, right or middle-drag pans,
-   scroll zooms.
-4. `Export` writes the selected archive, or every archive matching the current
-   search, as glTF plus PNG textures and a JSON report.
+```powershell
+cargo test --lib
+```
 
-Geometry is exported in its decoded bind pose; animation is not executed.
+### CI / release binaries
+
+GitHub Actions workflow [`.github/workflows/release.yml`](.github/workflows/release.yml):
+
+| Trigger | What it does |
+|---|---|
+| Push to `master` / `main`, pull requests | `cargo test --lib --release`, `cargo build --release --locked`, upload Windows x64 zip artifact |
+| Tag `v*` (e.g. `v0.1.0`) | Same build, then publish a GitHub Release with `age_viewer-windows-x64.zip` |
+| Manual **workflow_dispatch** with *Create release* | Draft release from the current branch |
+
+Download the latest artifact from the Actions tab, or a published asset from the
+Releases page. The zip contains `age_viewer.exe` only (no game data).
+
+```powershell
+# Publish a versioned release after pushing the commit:
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+### Workflow
+
+1. **Open a root** — `File > Open root...` and pick the unpacked `psp` folder
+   (or a subtree such as `psp/chr`). The root is remembered and re-indexed on
+   the next launch.
+2. **Search** — type a name or path fragment; toggle `Has models` /
+   `Has textures`; filter by `Area` (top-level folder).
+3. **Preview** — click a result. Left-drag orbits, right/middle-drag pans,
+   scroll zooms. Inspector shows archive facts, meshes, bindings, and texture
+   thumbnails.
+4. **Multi-select** — `Shift+click` for a range in the current result order.
+   Status shows `N selected`.
+5. **Context menu** (right-click a row):
+   - Export as glTF… / Export as OBJ… (selection or single row)
+   - Open (load in viewer)
+   - Open containing folder (Explorer, selects the file)
+   - Select all matches / Clear selection
+6. **Menu export** — `File > Export archive...`, `Export search results...`,
+   or `Export all indexed...`.
+
+### Export confirmation
+
+Every export path opens a folder picker, then a **confirm** dialog before any
+files are written:
+
+| Field | Meaning |
+|---|---|
+| Count | How many archives will be exported |
+| Scope | Single archive, selection, search results, or all indexed |
+| Output root | Destination folder you chose |
+| Format | glTF 2.0 (`.gltf` + `.bin`) or Wavefront OBJ (`.obj` + `.mtl`) |
+| Textures | Optional PNG under each package’s `textures/` |
+| Export list | Scrollable **Source → package folder** rows for review |
+
+Confirm button text is `Export N items`. Existing package folders are
+overwritten. Batch runs write `age_viewer_export_report.json` under the output
+root.
+
+### Package layout
+
+Folder names follow the original archive names (relative path without
+extension for batch exports):
+
+```text
+<out>/
+  chr/ms001000/ms001000_p000/
+    ms001000_p000.gltf   # or .obj + .mtl
+    ms001000_p000.bin    # glTF only
+    textures/
+      000.png
+      002.png
+  age_viewer_export_report.json   # batch only
+```
+
+Geometry is the decoded bind pose; animation is not executed.
+
+### Capture a UI screenshot
+
+```powershell
+cargo build --release
+powershell -NoProfile -File .\capture_ui.ps1 `
+  -Out docs\screenshots\age_viewer_main.png `
+  -WaitSeconds 16 `
+  -LoadWaitSeconds 4
+```
+
+The script starts the release binary, clicks a search row so a model is loaded,
+captures the window with `PrintWindow` (full content, for wgpu), and exits.
+Root/default path: `docs/screenshots/age_viewer_main.png`.
 
 ### Verifying against real game data
 
@@ -262,7 +357,7 @@ The Rust viewer is the root crate. The Python research pipeline lives under
 
 ```text
 Gundam-AGE-PSP/
-  Cargo.toml            # age_viewer crate (GUI viewer + glTF export)
+  Cargo.toml            # age_viewer crate (GUI viewer + glTF/OBJ export)
   src/                  # Rust: formats, renderer, GUI
     level5.rs           # Level-5 compression decode
     xpck.rs             # XPCK archive directory
@@ -271,15 +366,18 @@ Gundam-AGE-PSP/
     material.rs         # RES.bin/CHRP00 + .txp material binding
     scene.rs            # archive -> previewable scene
     gltf.rs             # static glTF 2.0 export
+    obj.rs              # Wavefront OBJ + MTL export
+    export_fmt.rs       # format choice + package folder naming
     index.rs            # threaded resource-tree scan + search
     render.rs           # orbit camera
     gpu_renderer.rs     # wgpu offscreen renderer (per-mesh textures)
     shaders/mesh.wgsl
-    theme.rs            # UI design tokens
+    theme.rs            # stock egui dark chrome helpers
     gui.rs, gui/        # egui shell, search, viewport, inspector, batch export
   tests/
     real_resource_tree.rs   # opt-in checks against real game data
-  capture_ui.ps1        # screenshot helper for UI verification
+  docs/screenshots/     # UI screenshots for README
+  capture_ui.ps1        # Windows UI screenshot helper
   README.md
   .gitignore
   tools/

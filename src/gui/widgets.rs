@@ -1,7 +1,4 @@
 //! Small shared painters and text helpers used by more than one panel.
-//!
-//! Every colour here comes from [`crate::theme`]; nothing in this module invents
-//! a colour or a corner radius.
 
 use crate::scene::DecodeFailure;
 use crate::theme;
@@ -62,59 +59,54 @@ pub fn ellipsize_middle(text: &str, max_chars: usize) -> String {
 
 /// Plain empty/idle state: one instruction line plus a de-emphasised hint.
 pub fn empty_state(ui: &mut egui::Ui, headline: &str, hint: &str) {
-    ui.add_space(10.0);
-    ui.label(theme::label(headline));
+    ui.add_space(8.0);
+    ui.label(headline);
     if !hint.is_empty() {
         ui.label(theme::caption(hint));
     }
 }
 
-/// Section heading with a thin rule under it.
+/// Section heading (stock egui strong text + separator).
 pub fn section_header(ui: &mut egui::Ui, title: &str) {
     ui.add_space(2.0);
     ui.label(theme::section(title));
-    let rule = egui::Rect::from_min_size(
-        ui.cursor().min,
-        egui::vec2(ui.available_width(), 1.0),
-    );
-    ui.painter().rect_filled(rule, 0, theme::STROKE_SUBTLE);
-    ui.add_space(4.0);
+    ui.separator();
 }
 
-/// Label / value line where the value is monospace at full contrast.
-pub fn field(ui: &mut egui::Ui, name: &str, value: &str) {
-    ui.horizontal(|ui| {
-        ui.label(theme::label(name));
-        truncating_label(ui, theme::mono_strong(value), value);
-    });
+/// Two-column property row: key (secondary) / value (monospace).
+pub fn property(ui: &mut egui::Ui, name: &str, value: &str) {
+    ui.label(theme::label(name));
+    truncating_label(ui, theme::mono(value), value);
+    ui.end_row();
 }
 
-/// Decode failures, listed in the error colour because they are real state.
+/// Decode failures listed with the error colour.
 pub fn failure_list(ui: &mut egui::Ui, title: &str, failures: &[DecodeFailure]) {
     if failures.is_empty() {
         return;
     }
     ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new(format!("{title} ({})", failures.len()))
-            .color(theme::STATUS_ERROR)
-            .strong(),
+    ui.colored_label(
+        theme::STATUS_ERROR,
+        format!("{title} ({})", failures.len()),
     );
     for failure in failures {
         let line = format!("{}: {}", failure.member, failure.error);
         let response = ui.add(
-            egui::Label::new(egui::RichText::new(&line).color(theme::STATUS_ERROR).small())
-                .truncate(),
+            egui::Label::new(
+                egui::RichText::new(&line)
+                    .small()
+                    .color(theme::STATUS_ERROR),
+            )
+            .truncate(),
         );
         response.on_hover_text(&line);
     }
 }
 
-/// Two-tone backdrop so texture transparency is readable. Cell size is clamped
-/// so a large rect cannot emit tens of thousands of quads.
+/// Two-tone backdrop so texture transparency is readable.
 pub fn paint_checkerboard(painter: &egui::Painter, rect: egui::Rect, cell: f32) {
-    let radius = egui::CornerRadius::same(theme::RADIUS_CONTROL);
-    painter.rect_filled(rect, radius, theme::BG_SUNKEN);
+    painter.rect_filled(rect, 0.0, theme::BG_SUNKEN);
     let longest = rect.width().max(rect.height());
     let cell = cell.max(longest / 64.0).max(2.0);
     let cols = (rect.width() / cell).ceil() as i32;
@@ -132,7 +124,7 @@ pub fn paint_checkerboard(painter: &egui::Painter, rect: egui::Rect, cell: f32) 
                 (min.x + cell).min(rect.right()),
                 (min.y + cell).min(rect.bottom()),
             );
-            painter.rect_filled(egui::Rect::from_min_max(min, max), 0, theme::BG_ROW_ALT);
+            painter.rect_filled(egui::Rect::from_min_max(min, max), 0.0, theme::BG_ROW_ALT);
         }
     }
 }
@@ -145,7 +137,6 @@ mod tests {
     fn short_text_is_returned_unchanged() {
         assert_eq!(ellipsize_middle("chr/a.xc", 32), "chr/a.xc");
         assert_eq!(ellipsize_middle("", 8), "");
-        // Exactly at the budget is still unchanged.
         assert_eq!(ellipsize_middle("12345678", 8), "12345678");
     }
 
@@ -156,14 +147,11 @@ mod tests {
         let short = ellipsize_middle(path, 20);
         assert_eq!(short.chars().count(), 20);
         assert!(short.contains('\u{2026}'));
-        // Head and tail are both taken from the original, tail gets the bigger
-        // share so the file name stays recognisable.
         assert!(path.starts_with(short.split('\u{2026}').next().unwrap()));
         let tail = short.split('\u{2026}').nth(1).unwrap();
         assert!(path.ends_with(tail));
         assert!(tail.chars().count() > short.split('\u{2026}').next().unwrap().chars().count());
 
-        // With room for the whole file name, the file name survives intact.
         let roomy = ellipsize_middle(path, 28);
         assert_eq!(roomy.chars().count(), 28);
         assert!(roomy.ends_with("ms001000_p000.xc"));
@@ -181,7 +169,6 @@ mod tests {
         let text = "chr/\u{30ac}\u{30f3}\u{30c0}\u{30e0}/\u{6a5f}\u{4f53}.xc";
         let short = ellipsize_middle(text, 8);
         assert_eq!(short.chars().count(), 8);
-        // Must remain valid UTF-8 with whole characters preserved.
         assert!(short.ends_with(".xc"));
     }
 }

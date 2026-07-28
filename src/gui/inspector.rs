@@ -1,7 +1,7 @@
-//! Right-hand inspector: archive summary, mesh list, texture list.
+//! Right-hand inspector: objective archive / mesh / texture facts.
 //!
-//! Decoded textures are uploaded to egui once per archive and cached; the list
-//! never re-uploads a thumbnail while the same archive stays open.
+//! Layout is a plain property grid plus compact lists. No decorative chrome —
+//! values are the product, not the frame around them.
 
 use super::widgets;
 use crate::imgp::Texture;
@@ -10,7 +10,7 @@ use crate::theme;
 use eframe::egui;
 
 /// Side length of a texture thumbnail, in points.
-const THUMBNAIL: f32 = 56.0;
+const THUMBNAIL: f32 = 48.0;
 
 /// Per-archive cache of egui texture handles for the thumbnail strip.
 #[derive(Default)]
@@ -56,7 +56,6 @@ impl ThumbnailCache {
         if slot.is_none() {
             let size = [texture.width.max(1) as usize, texture.height.max(1) as usize];
             let mut rgba = texture.rgba_bytes();
-            // A short decode must not panic ColorImage; pad to the declared size.
             rgba.resize(size[0] * size[1] * 4, 0);
             let image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
             *slot = Some(ctx.load_texture(
@@ -87,10 +86,10 @@ pub fn show(
             widgets::failure_list(ui, "Mesh decode failures", &scene.mesh_failures);
             widgets::failure_list(ui, "Texture decode failures", &scene.texture_failures);
 
-            ui.add_space(10.0);
+            ui.add_space(8.0);
             mesh_list(ui, scene);
 
-            ui.add_space(10.0);
+            ui.add_space(8.0);
             open_texture = texture_list(ui, ctx, scene, thumbs);
         });
 
@@ -99,58 +98,64 @@ pub fn show(
 
 fn archive_summary(ui: &mut egui::Ui, scene: &Scene) {
     widgets::section_header(ui, "Archive");
-    widgets::truncating_label(
-        ui,
-        theme::mono_strong(&scene.archive_name),
-        &scene.archive_name,
-    );
-    widgets::field(ui, "Members", &theme::format_count(scene.member_count));
-    widgets::field(ui, "Size", &theme::format_bytes(scene.archive_size));
-    widgets::field(
-        ui,
-        "Meshes",
-        &format!(
-            "{} decoded, {} textures",
-            theme::format_count(scene.meshes.len()),
-            theme::format_count(scene.textures.len())
-        ),
-    );
-    widgets::field(ui, "Vertices", &theme::format_count(scene.total_vertices()));
-    widgets::field(
-        ui,
-        "Faces",
-        &format!(
-            "{} total, {} visible",
-            theme::format_count(scene.total_faces()),
-            theme::format_count(scene.visible_faces())
-        ),
-    );
-    widgets::field(ui, "Skinned", if scene.is_skinned() { "yes" } else { "no" });
-    widgets::field(
-        ui,
-        "Bindings",
-        &format!(
-            "{} of {} resolved",
-            theme::format_count(scene.bindings.resolved_count()),
-            theme::format_count(scene.bindings.materials.len())
-        ),
-    );
-    if let Some(member) = &scene.bindings.res_member {
-        let method = scene.bindings.res_method.as_deref().unwrap_or("unknown");
-        widgets::field(ui, "Resource", &format!("{member} ({method})"));
-    }
+
+    egui::Grid::new("archive_summary")
+        .num_columns(2)
+        .spacing([12.0, 3.0])
+        .striped(true)
+        .show(ui, |ui| {
+            widgets::property(ui, "File", &scene.archive_name);
+            if let Some(path) = scene.archive_path.as_ref() {
+                widgets::property(ui, "Path", &path.display().to_string());
+            }
+            widgets::property(ui, "Size", &theme::format_bytes(scene.archive_size));
+            widgets::property(ui, "Members", &theme::format_count(scene.member_count));
+            widgets::property(ui, "Meshes", &theme::format_count(scene.meshes.len()));
+            widgets::property(ui, "Textures", &theme::format_count(scene.textures.len()));
+            widgets::property(ui, "Vertices", &theme::format_count(scene.total_vertices()));
+            widgets::property(
+                ui,
+                "Faces",
+                &format!(
+                    "{} ({} visible)",
+                    theme::format_count(scene.total_faces()),
+                    theme::format_count(scene.visible_faces())
+                ),
+            );
+            widgets::property(
+                ui,
+                "Skinned",
+                if scene.is_skinned() { "yes" } else { "no" },
+            );
+            widgets::property(
+                ui,
+                "Material binds",
+                &format!(
+                    "{}/{}",
+                    theme::format_count(scene.bindings.resolved_count()),
+                    theme::format_count(scene.bindings.materials.len())
+                ),
+            );
+            if let Some(member) = &scene.bindings.res_member {
+                let method = scene.bindings.res_method.as_deref().unwrap_or("unknown");
+                widgets::property(ui, "RES", &format!("{member} ({method})"));
+            }
+        });
 
     if !scene.member_extensions.is_empty() {
-        ui.add_space(6.0);
-        ui.label(theme::label("Member types"));
-        let breakdown = scene
-            .member_extensions
-            .iter()
-            .map(|(ext, count)| format!("{ext} {count}"))
-            .collect::<Vec<_>>()
-            .join("   ");
-        let response = ui.add(egui::Label::new(theme::mono(&breakdown)).truncate());
-        response.on_hover_text(&breakdown);
+        ui.add_space(4.0);
+        widgets::section_header(ui, "Member types");
+        egui::Grid::new("member_types")
+            .num_columns(2)
+            .spacing([12.0, 2.0])
+            .striped(true)
+            .show(ui, |ui| {
+                for (ext, count) in &scene.member_extensions {
+                    ui.label(theme::mono(ext));
+                    ui.label(theme::mono(theme::format_count(*count)));
+                    ui.end_row();
+                }
+            });
     }
 }
 
@@ -164,20 +169,24 @@ fn mesh_list(ui: &mut egui::Ui, scene: &mut Scene) {
         if ui.button("Hide all").clicked() {
             scene.set_all_visible(false);
         }
+        ui.label(theme::caption(format!(
+            "{} total",
+            theme::format_count(scene.meshes.len())
+        )));
     });
 
     if scene.meshes.is_empty() {
         widgets::empty_state(
             ui,
-            "This archive has no models.",
-            "It may hold only textures, animation or layout data.",
+            "No models in this archive.",
+            "May contain only textures, animation or layout data.",
         );
         return;
     }
 
-    ui.add_space(4.0);
+    ui.add_space(2.0);
     for index in 0..scene.meshes.len() {
-        let (name, material, source, vertices, faces, warning, dropped) = {
+        let (name, material, source, vertices, faces, position_format, uv_format, warning, dropped) = {
             let entry = &scene.meshes[index];
             (
                 entry.mesh.name.clone(),
@@ -185,6 +194,8 @@ fn mesh_list(ui: &mut egui::Ui, scene: &mut Scene) {
                 entry.mesh.source.clone(),
                 entry.mesh.vertex_count(),
                 entry.mesh.face_count(),
+                entry.mesh.position_format.label().to_string(),
+                entry.mesh.uv_format.label().to_string(),
                 entry.mesh.warnings.first().cloned(),
                 entry.mesh.dropped_degenerate_faces,
             )
@@ -193,52 +204,39 @@ fn mesh_list(ui: &mut egui::Ui, scene: &mut Scene) {
             .texture_index
             .and_then(|i| scene.texture(i))
             .map(|entry| entry.member.clone());
-        let confidence = scene.meshes[index].binding;
+        let confidence = scene.meshes[index].binding.label();
 
         ui.push_id(index, |ui| {
             ui.horizontal(|ui| {
                 ui.checkbox(&mut scene.meshes[index].visible, "");
-                let label = format!("{source}  {name}");
-                widgets::truncating_label(ui, theme::mono_strong(&label), &label);
+                widgets::truncating_label(
+                    ui,
+                    theme::mono_strong(format!("{source}  {name}")),
+                    &format!("{source}  {name}"),
+                );
             });
-            ui.horizontal(|ui| {
-                ui.add_space(22.0);
+
+            // Indent detail lines without using Grid (egui forbids add_space in grids).
+            ui.indent("mesh_detail", |ui| {
                 ui.label(theme::mono(format!(
-                    "{} verts   {} faces",
+                    "v={}  f={}  pos={}  uv={}",
                     theme::format_count(vertices),
-                    theme::format_count(faces)
+                    theme::format_count(faces),
+                    position_format,
+                    uv_format
                 )));
-            });
-            ui.horizontal(|ui| {
-                ui.add_space(22.0);
-                match &texture_member {
-                    Some(member) => {
-                        let text = format!("{material} -> {member}");
-                        widgets::truncating_label(ui, theme::mono(&text), &text);
-                    }
-                    None => {
-                        widgets::truncating_label(ui, theme::mono(&material), &material);
-                        ui.label(
-                            egui::RichText::new("unresolved")
-                                .small()
-                                .color(theme::STATUS_WARN),
-                        );
-                    }
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.add_space(22.0);
-                ui.label(theme::caption(confidence.label()));
+                let bind_line = match &texture_member {
+                    Some(member) => format!("{material} -> {member}  [{confidence}]"),
+                    None => format!("{material}  [{confidence}]"),
+                };
+                widgets::truncating_label(ui, theme::mono(&bind_line), &bind_line);
                 if dropped > 0 {
                     ui.label(theme::caption(format!(
-                        "{} degenerate faces dropped",
+                        "degenerate faces dropped: {}",
                         theme::format_count(dropped)
                     )));
                 }
-            });
-            if let Some(warning) = warning {
-                ui.horizontal(|ui| {
-                    ui.add_space(22.0);
+                if let Some(warning) = warning {
                     let response = ui.add(
                         egui::Label::new(
                             egui::RichText::new(&warning)
@@ -248,9 +246,9 @@ fn mesh_list(ui: &mut egui::Ui, scene: &mut Scene) {
                         .truncate(),
                     );
                     response.on_hover_text(&warning);
-                });
-            }
-            ui.add_space(6.0);
+                }
+            });
+            ui.add_space(4.0);
         });
     }
 }
@@ -264,7 +262,7 @@ fn texture_list(
     widgets::section_header(ui, "Textures");
 
     if scene.textures.is_empty() {
-        widgets::empty_state(ui, "This archive has no textures.", "");
+        widgets::empty_state(ui, "No textures in this archive.", "");
         return None;
     }
 
@@ -289,8 +287,8 @@ fn texture_list(
                 }
                 painter.rect_stroke(
                     rect,
-                    egui::CornerRadius::same(theme::RADIUS_CONTROL),
-                    egui::Stroke::new(1.0_f32, theme::STROKE_SUBTLE),
+                    0.0,
+                    ui.visuals().widgets.noninteractive.bg_stroke,
                     egui::StrokeKind::Inside,
                 );
             }
@@ -301,12 +299,12 @@ fn texture_list(
             ui.vertical(|ui| {
                 widgets::truncating_label(ui, theme::mono_strong(&entry.member), &entry.member);
                 ui.label(theme::mono(describe_texture(&entry.texture)));
-                if ui.button("Preview").clicked() {
+                if ui.small_button("Open").clicked() {
                     clicked = Some(index);
                 }
             });
         });
-        ui.add_space(6.0);
+        ui.add_space(4.0);
     }
     clicked
 }
@@ -345,10 +343,8 @@ mod tests {
         assert_eq!(cache.handles.len(), 3);
         assert_eq!(cache.uploaded(), 0);
 
-        // Same archive, same texture count: keep the cache as it is.
         assert!(!cache.sync(1, 3));
 
-        // New archive: rebuild the slot list.
         assert!(cache.sync(2, 1));
         assert_eq!(cache.handles.len(), 1);
 
@@ -379,7 +375,6 @@ mod tests {
         assert!((tall.width() - 12.5).abs() < 0.01);
         assert!(bounds.contains_rect(tall));
 
-        // Degenerate dimensions must not produce NaN.
         let degenerate = fit_rect(bounds, 0, 0);
         assert!(degenerate.width().is_finite() && degenerate.height().is_finite());
     }

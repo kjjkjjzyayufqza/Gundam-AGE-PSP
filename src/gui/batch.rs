@@ -1,12 +1,13 @@
-//! Background batch glTF export.
+//! Background batch export (glTF or OBJ).
 //!
 //! Export only: nothing in this module ever writes back into a game archive.
 //! One worker thread walks the archives the user is looking at, writes each into
-//! its own subfolder, keeps going when a single archive fails, and drops a JSON
-//! report next to the output so a 4,500-archive run can be audited afterwards.
+//! a package directory named after the original relative path, keeps going when
+//! a single archive fails, and drops a JSON report next to the output.
 
+use crate::export_fmt::{self, Format, Options, Summary};
 use crate::theme;
-use crate::{gltf, imgp, scene::Scene, xmpr};
+use crate::{imgp, scene::Scene, xmpr};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -23,7 +24,7 @@ const MAX_TRACKED_FAILURES: usize = 50;
 #[derive(Clone, Debug)]
 pub struct Target {
     pub path: PathBuf,
-    /// Path relative to the resource root, for reports and progress text.
+    /// Path relative to the resource root, for reports, progress and folders.
     pub relative: String,
 }
 
@@ -45,8 +46,8 @@ struct Counts {
     skipped: usize,
 }
 
-impl From<&gltf::ExportSummary> for Counts {
-    fn from(summary: &gltf::ExportSummary) -> Self {
+impl From<&Summary> for Counts {
+    fn from(summary: &Summary) -> Self {
         Self {
             meshes: summary.mesh_count,
             vertices: summary.vertex_count,
@@ -95,7 +96,7 @@ impl Job {
     pub fn spawn(
         targets: Vec<Target>,
         out_dir: PathBuf,
-        options: gltf::ExportOptions,
+        options: Options,
         triangulation: xmpr::Triangulation,
         layout: imgp::PixelLayout,
     ) -> Self {
@@ -120,17 +121,28 @@ impl Job {
                     current: target.relative.clone(),
                 });
 
-                let folder = unique_folder_name(&mut taken, &target.relative);
+                let package = export_fmt::package_dir(&worker_out_dir, &target.relative, &mut taken);
+                let folder = package
+                    .strip_prefix(&worker_out_dir)
+                    .unwrap_or(package.as_path())
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 let outcome = Outcome {
                     relative: target.relative.clone(),
-                    folder: folder.clone(),
-                    detail: export_one(&target.path, &worker_out_dir.join(&folder), options, triangulation, layout),
+                    folder,
+                    detail: export_one(
+                        &target.path,
+                        &package,
+                        options,
+                        triangulation,
+                        layout,
+                    ),
                 };
                 let _ = sender.send(Message::Item(outcome.clone()));
                 outcomes.push(outcome);
             }
 
-            let report = write_report(&worker_out_dir, total, &outcomes, cancelled);
+            let report = write_report(&worker_out_dir, total, options.format, &outcomes, cancelled);
             let _ = sender.send(Message::Finished { cancelled, report });
         });
 
@@ -219,18 +231,18 @@ impl Job {
 }
 
 /// Load and export one archive. A decoder panic is contained so a single bad
-/// archive cannot abort a 4,500-archive run.
+/// archive cannot abort a large batch run.
 fn export_one(
     path: &Path,
     out_dir: &Path,
-    options: gltf::ExportOptions,
+    options: Options,
     triangulation: xmpr::Triangulation,
     layout: imgp::PixelLayout,
 ) -> Result<Counts, String> {
     let name = archive_stem(path);
     let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Scene::load(path, triangulation, layout)
-            .and_then(|scene| gltf::export_scene(&scene, out_dir, &name, options))
+            .and_then(|scene| export_fmt::export_scene(&scene, out_dir, &name, options))
     }));
     match attempt {
         Ok(Ok(summary)) => Ok(Counts::from(&summary)),
@@ -245,26 +257,6 @@ pub fn archive_stem(path: &Path) -> String {
         .and_then(|stem| stem.to_str())
         .unwrap_or("archive")
         .to_string()
-}
-
-/// Subfolder name for one archive: the sanitized stem, made unique by a numeric
-/// suffix when two archives in different directories share a stem.
-pub fn unique_folder_name(taken: &mut HashSet<String>, relative: &str) -> String {
-    let stem = Path::new(relative)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or(relative);
-    let base = gltf::sanitize(stem, "archive");
-    if taken.insert(base.clone()) {
-        return base;
-    }
-    for suffix in 2..=u32::MAX {
-        let candidate = format!("{base}_{suffix}");
-        if taken.insert(candidate.clone()) {
-            return candidate;
-        }
-    }
-    base
 }
 
 /// `"142 of 312 archives, chr/ms001000/ms001000_p000.xc"`.
@@ -304,7 +296,13 @@ pub fn summary_label(finished: &Finished, out_dir: &Path) -> String {
 }
 
 /// Build the JSON report body.
-fn report_json(out_dir: &Path, requested: usize, outcomes: &[Outcome], cancelled: bool) -> Value {
+fn report_json(
+    out_dir: &Path,
+    requested: usize,
+    format: Format,
+    outcomes: &[Outcome],
+    cancelled: bool,
+) -> Value {
     let entries: Vec<Value> = outcomes
         .iter()
         .map(|outcome| match &outcome.detail {
@@ -330,7 +328,8 @@ fn report_json(out_dir: &Path, requested: usize, outcomes: &[Outcome], cancelled
 
     let exported = outcomes.iter().filter(|o| o.detail.is_ok()).count();
     json!({
-        "tool": "age_viewer glTF batch export",
+        "tool": "age_viewer batch export",
+        "format": format.short_label(),
         "output_dir": out_dir.display().to_string(),
         "requested": requested,
         "attempted": outcomes.len(),
@@ -344,10 +343,11 @@ fn report_json(out_dir: &Path, requested: usize, outcomes: &[Outcome], cancelled
 fn write_report(
     out_dir: &Path,
     requested: usize,
+    format: Format,
     outcomes: &[Outcome],
     cancelled: bool,
 ) -> Result<PathBuf, String> {
-    let body = report_json(out_dir, requested, outcomes, cancelled);
+    let body = report_json(out_dir, requested, format, outcomes, cancelled);
     let text = serde_json::to_string_pretty(&body).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
     let path = out_dir.join(REPORT_FILE_NAME);
@@ -358,6 +358,7 @@ fn write_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::export_fmt;
 
     fn ok_outcome(relative: &str, folder: &str) -> Outcome {
         Outcome {
@@ -383,38 +384,33 @@ mod tests {
     }
 
     #[test]
-    fn folder_names_come_from_the_archive_stem() {
+    fn package_dirs_follow_original_relative_names() {
         let mut taken = HashSet::new();
-        assert_eq!(
-            unique_folder_name(&mut taken, "chr/ms001000/ms001000_p000.xc"),
-            "ms001000_p000"
+        let dir = export_fmt::package_dir(
+            Path::new("out"),
+            "chr/ms001000/ms001000_p000.xc",
+            &mut taken,
         );
-        assert_eq!(unique_folder_name(&mut taken, "map/e1101.xc"), "e1101");
-        assert_eq!(unique_folder_name(&mut taken, "top.xc"), "top");
+        assert_eq!(
+            dir,
+            PathBuf::from("out")
+                .join("chr")
+                .join("ms001000")
+                .join("ms001000_p000")
+        );
+        assert_eq!(
+            export_fmt::package_dir(Path::new("out"), "map/e1101.xc", &mut taken),
+            PathBuf::from("out").join("map").join("e1101")
+        );
     }
 
     #[test]
-    fn colliding_stems_get_numeric_suffixes() {
+    fn colliding_packages_get_numeric_leaf_suffixes() {
         let mut taken = HashSet::new();
-        assert_eq!(unique_folder_name(&mut taken, "chr/a/model.xc"), "model");
-        assert_eq!(unique_folder_name(&mut taken, "map/b/model.xc"), "model_2");
-        assert_eq!(unique_folder_name(&mut taken, "eff/c/model.xc"), "model_3");
-        assert_eq!(taken.len(), 3);
-    }
-
-    #[test]
-    fn folder_names_are_filesystem_safe() {
-        let mut taken = HashSet::new();
-        // Spaces and separators become underscores; nothing escapes the out dir.
-        let name = unique_folder_name(&mut taken, "chr/odd name (2).xc");
-        assert!(!name.contains(' '));
-        assert!(!name.contains('/'));
-        assert!(!name.contains('\\'));
-        assert!(!name.contains(".."));
-        assert_eq!(name, "odd_name__2_");
-
-        let fallback = unique_folder_name(&mut taken, "chr/....xc");
-        assert!(!fallback.is_empty());
+        let a = export_fmt::package_dir(Path::new("out"), "chr/a/model.xc", &mut taken);
+        let b = export_fmt::package_dir(Path::new("out"), "chr/a/model.xc", &mut taken);
+        assert_eq!(a.file_name().unwrap(), "model");
+        assert_eq!(b.file_name().unwrap(), "model_2");
     }
 
     #[test]
@@ -467,13 +463,14 @@ mod tests {
             failed_outcome("chr/b.xc", "b", "no exportable geometry"),
             ok_outcome("map/c.xc", "c"),
         ];
-        let body = report_json(Path::new("out"), 5, &outcomes, true);
+        let body = report_json(Path::new("out"), 5, Format::Gltf, &outcomes, true);
 
         assert_eq!(body["requested"], 5);
         assert_eq!(body["attempted"], 3);
         assert_eq!(body["exported"], 2);
         assert_eq!(body["failed"], 1);
         assert_eq!(body["cancelled"], true);
+        assert_eq!(body["format"], "glTF");
 
         let entries = body["entries"].as_array().expect("entries array");
         assert_eq!(entries.len(), 3);
@@ -494,19 +491,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         let outcomes = vec![ok_outcome("chr/a.xc", "a")];
-        let path = write_report(&dir, 1, &outcomes, false).expect("report written");
+        let path = write_report(&dir, 1, Format::Obj, &outcomes, false).expect("report written");
         assert_eq!(path.file_name().unwrap(), REPORT_FILE_NAME);
 
         let text = std::fs::read_to_string(&path).expect("report readable");
         let parsed: Value = serde_json::from_str(&text).expect("report is valid JSON");
         assert_eq!(parsed["exported"], 1);
+        assert_eq!(parsed["format"], "OBJ");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn an_empty_run_still_produces_a_consistent_report() {
-        let body = report_json(Path::new("out"), 0, &[], false);
+        let body = report_json(Path::new("out"), 0, Format::Gltf, &[], false);
         assert_eq!(body["attempted"], 0);
         assert_eq!(body["exported"], 0);
         assert_eq!(body["failed"], 0);

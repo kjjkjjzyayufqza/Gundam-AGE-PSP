@@ -1,0 +1,107 @@
+# Build age_viewer in release mode and publish artifacts.
+#
+# - push to master/main or PR: compile + unit tests + upload build artifact
+# - tag v* or manual "Release" dispatch: also create a GitHub Release with the binary
+
+name: Release
+
+on:
+  push:
+    branches: [master, main]
+    tags: ["v*"]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: "Create a GitHub Release from this run (uses run id as draft tag if not on a v* tag)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  build-windows:
+    name: Windows release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-release
+
+      - name: Unit tests (no game data)
+        run: cargo test --lib --release
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package artifact
+        shell: pwsh
+        run: |
+          $dist = "dist/windows-x64"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item "target/release/age_viewer.exe" "$dist/age_viewer.exe"
+          @"
+          age_viewer (Windows x64, release)
+          =================================
+          Built from commit: $env:GITHUB_SHA
+          Ref: $env:GITHUB_REF
+
+          Run age_viewer.exe, then File > Open root... and select an unpacked
+          PSP resource tree. This build does not include game data.
+
+          See README.md in the repository for usage.
+          "@ | Set-Content -Path "$dist/README.txt" -Encoding utf8
+
+          Compress-Archive -Path "$dist/*" -DestinationPath "age_viewer-windows-x64.zip" -Force
+          Get-Item "age_viewer-windows-x64.zip", "$dist/age_viewer.exe" |
+            Format-Table Name, Length -AutoSize
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: age_viewer-windows-x64
+          path: age_viewer-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    needs: build-windows
+    runs-on: ubuntu-latest
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.create_release)
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: age_viewer-windows-x64
+          path: release-assets
+
+      - name: List assets
+        run: ls -la release-assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # On workflow_dispatch without a tag, softprops needs a tag_name.
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('build-{0}', github.run_number) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('Build {0}', github.run_number) }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/') }}
+          generate_release_notes: true
+          files: release-assets/age_viewer-windows-x64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

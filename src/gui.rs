@@ -8,8 +8,8 @@
 //! with its toolbar in the centre. This is a dense tool, not a page: nothing
 //! animates except the viewport itself and real progress.
 //!
-//! This viewer is read-only. It previews and exports; it never writes back into
-//! a game archive.
+//! This viewer is read-only. It previews and exports (glTF or OBJ packages with
+//! textures); it never writes back into a game archive.
 
 mod batch;
 mod fonts;
@@ -25,12 +25,31 @@ use crate::index::{self, ArchiveRecord, ScanHandle, ScanMessage, ScanProgress, S
 use crate::render::{PreviewBounds, PreviewCamera, PreviewState};
 use crate::scene::Scene;
 use crate::xmpr::Triangulation;
-use crate::{gltf, imgp, theme};
+use crate::export_fmt::{self, Format as ExportFormat, Options as ExportOptions};
+use crate::{imgp, theme};
 use eframe::egui;
 use eframe::egui_wgpu::wgpu;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
+
+/// Deferred action from the archive list (click / context menu).
+enum ListCommand {
+    /// Primary click on a result row. `shift` enables range multi-select.
+    Click { record_index: usize, shift: bool },
+    /// Load the archive without changing multi-select beyond ensuring it is selected.
+    Open { record_index: usize },
+    /// Reveal the archive path in the OS file manager.
+    RevealInFolder { record_index: usize },
+    /// Export the given record indices (may be one or many).
+    Export {
+        record_indices: Vec<usize>,
+        format: ExportFormat,
+    },
+    SelectAllMatches,
+    ClearSelection,
+}
 
 /// AGE PSP textures are always PSP-swizzled; there is no reason to expose a
 /// layout switch in the UI until a counter-example turns up.
@@ -131,14 +150,26 @@ struct ScanJob {
     cancelling: bool,
 }
 
+/// One row in the export confirmation list: source archive vs package folder.
+#[derive(Clone, Debug)]
+struct ExportPreviewRow {
+    /// Original archive label (relative path or file name).
+    source: String,
+    /// Full package directory that will be written under the destination root.
+    package_dir: String,
+}
+
 /// A confirmed-but-not-yet-started export.
 struct ExportPlan {
     out_dir: PathBuf,
     /// Empty for a single-archive export, which uses the loaded scene.
     targets: Vec<batch::Target>,
-    /// Label shown in the confirmation modal.
+    /// Rows shown in the confirmation list (always non-empty when plan is valid).
+    preview: Vec<ExportPreviewRow>,
+    /// Label shown in the confirmation modal title area.
     subject: String,
     single: bool,
+    format: ExportFormat,
 }
 
 pub struct AgeViewerApp {
@@ -167,7 +198,12 @@ pub struct AgeViewerApp {
     scene: Option<Scene>,
     /// Bumped on every archive load; keys the GPU and thumbnail caches.
     scene_generation: u64,
+    /// Primary (previewed) archive index into `records`.
     selected_record: Option<usize>,
+    /// Multi-selection of archive indices for batch export / context menus.
+    list_selection: HashSet<usize>,
+    /// Anchor record index for Shift+click range selection.
+    list_anchor: Option<usize>,
     triangulation: Triangulation,
 
     // UI state
@@ -181,6 +217,8 @@ pub struct AgeViewerApp {
     modal_error: Option<String>,
     focus_search: bool,
     export_only_visible: bool,
+    export_format: ExportFormat,
+    export_write_textures: bool,
     pending_export: Option<ExportPlan>,
     batch: Option<batch::Job>,
 
@@ -249,6 +287,8 @@ impl AgeViewerApp {
             scene: None,
             scene_generation: 0,
             selected_record: None,
+            list_selection: HashSet::new(),
+            list_anchor: None,
             triangulation: Triangulation::Strip,
 
             preview,
@@ -261,6 +301,8 @@ impl AgeViewerApp {
             modal_error: None,
             focus_search: true,
             export_only_visible: false,
+            export_format: ExportFormat::Gltf,
+            export_write_textures: true,
             pending_export: None,
             batch: None,
 
@@ -297,6 +339,8 @@ impl AgeViewerApp {
         self.filter.category = None;
         self.results.invalidate();
         self.selected_record = None;
+        self.list_selection.clear();
+        self.list_anchor = None;
 
         persist::remember_root(&mut self.persisted.recent_roots, &root);
         self.persisted.resource_root = Some(root.clone());
@@ -392,7 +436,147 @@ impl AgeViewerApp {
         };
         let path = record.path.clone();
         self.selected_record = Some(index);
+        self.list_selection.insert(index);
         self.load_archive(path);
+    }
+
+    /// Left-click on a result row: single select, or Shift+range multi-select.
+    fn list_primary_click(&mut self, record_index: usize, shift: bool) {
+        if self.records.get(record_index).is_none() {
+            return;
+        }
+        if shift {
+            if let Some(anchor) = self.list_anchor {
+                let range =
+                    search::range_record_indices(self.results.matches(), anchor, record_index);
+                self.list_selection = range.into_iter().collect();
+                // Keep the original anchor so further Shift+clicks extend from it.
+            } else {
+                self.list_selection.clear();
+                self.list_selection.insert(record_index);
+                self.list_anchor = Some(record_index);
+            }
+        } else {
+            self.list_selection.clear();
+            self.list_selection.insert(record_index);
+            self.list_anchor = Some(record_index);
+        }
+        // Always preview the clicked end of the range.
+        self.select_record(record_index);
+    }
+
+    /// Drop multi-select entries that are no longer in the current result set.
+    fn prune_list_selection(&mut self) {
+        if self.list_selection.is_empty() {
+            return;
+        }
+        let valid: HashSet<usize> = self.results.matches().iter().copied().collect();
+        self.list_selection.retain(|i| valid.contains(i));
+        if let Some(anchor) = self.list_anchor {
+            if !valid.contains(&anchor) {
+                self.list_anchor = self.list_selection.iter().next().copied();
+            }
+        }
+        if let Some(primary) = self.selected_record {
+            if !valid.contains(&primary) && !self.list_selection.is_empty() {
+                // Keep preview pointer consistent when filter removes the primary.
+                // Do not auto-load; only drop the stale primary mark.
+                self.selected_record = None;
+            }
+        }
+    }
+
+    /// Build batch targets from selected record indices (stable relative-path order).
+    fn targets_from_record_indices(&self, indices: &[usize]) -> Vec<batch::Target> {
+        let mut unique: Vec<usize> = indices.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        unique
+            .into_iter()
+            .filter_map(|index| self.records.get(index))
+            .map(|record| batch::Target {
+                path: record.path.clone(),
+                relative: record.relative.clone(),
+            })
+            .collect()
+    }
+
+    fn export_record_indices_dialog(&mut self, indices: &[usize], format: ExportFormat) {
+        let targets = self.targets_from_record_indices(indices);
+        if targets.is_empty() {
+            self.status = Status::warn("No archives selected to export.".to_string());
+            return;
+        }
+        self.export_format = format;
+        let Some(out_dir) = self.pick_export_dir() else {
+            return;
+        };
+        let subject = if targets.len() == 1 {
+            targets[0].relative.clone()
+        } else {
+            format!("{} selected archives", theme::format_count(targets.len()))
+        };
+        let preview = preview_rows_for_targets(&out_dir, &targets);
+        // List exports always use the batch path so package folders follow
+        // original relative names.
+        self.pending_export = Some(ExportPlan {
+            subject,
+            out_dir,
+            targets,
+            preview,
+            single: false,
+            format,
+        });
+    }
+
+    fn apply_list_command(&mut self, cmd: ListCommand) {
+        match cmd {
+            ListCommand::Click {
+                record_index,
+                shift,
+            } => self.list_primary_click(record_index, shift),
+            ListCommand::Open { record_index } => {
+                self.list_selection.insert(record_index);
+                if self.list_anchor.is_none() {
+                    self.list_anchor = Some(record_index);
+                }
+                self.select_record(record_index);
+            }
+            ListCommand::RevealInFolder { record_index } => {
+                self.reveal_record_in_folder(record_index);
+            }
+            ListCommand::Export {
+                record_indices,
+                format,
+            } => self.export_record_indices_dialog(&record_indices, format),
+            ListCommand::SelectAllMatches => {
+                self.list_selection = self.results.matches().iter().copied().collect();
+                self.list_anchor = self.results.matches().first().copied();
+            }
+            ListCommand::ClearSelection => {
+                self.list_selection.clear();
+                self.list_anchor = None;
+            }
+        }
+    }
+
+    /// Open the OS file manager at the archive's location (selecting the file when possible).
+    fn reveal_record_in_folder(&mut self, record_index: usize) {
+        let Some(record) = self.records.get(record_index) else {
+            self.status = Status::warn("No archive selected.".to_string());
+            return;
+        };
+        let path = record.path.clone();
+        match reveal_in_file_manager(&path) {
+            Ok(()) => {
+                self.status = Status::ok(format!("Opened folder for {}", record.relative));
+            }
+            Err(error) => {
+                let message = format!("Could not open folder for {}: {error}", record.relative);
+                self.status = Status::error(message.clone());
+                self.modal_error = Some(message);
+            }
+        }
     }
 
     fn load_archive(&mut self, path: PathBuf) {
@@ -493,19 +677,33 @@ impl AgeViewerApp {
     // ------------------------------------------------------------------ export
 
     fn export_current_archive_dialog(&mut self) {
-        let Some(scene) = self.scene.as_ref() else {
-            self.status = Status::warn("No archive is loaded.".to_string());
-            return;
+        let (subject, source) = {
+            let Some(scene) = self.scene.as_ref() else {
+                self.status = Status::warn("No archive is loaded.".to_string());
+                return;
+            };
+            let subject = scene.archive_name.clone();
+            let source = scene
+                .archive_path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| scene.archive_name.clone());
+            (subject, source)
         };
-        let subject = scene.archive_name.clone();
         let Some(out_dir) = self.pick_export_dir() else {
             return;
         };
+        let package = export_fmt::package_dir_from_name(&out_dir, &subject);
         self.pending_export = Some(ExportPlan {
             out_dir,
             targets: Vec::new(),
+            preview: vec![ExportPreviewRow {
+                source,
+                package_dir: package.display().to_string(),
+            }],
             subject,
             single: true,
+            format: self.export_format,
         });
     }
 
@@ -528,11 +726,14 @@ impl AgeViewerApp {
         let Some(out_dir) = self.pick_export_dir() else {
             return;
         };
+        let preview = preview_rows_for_targets(&out_dir, &targets);
         self.pending_export = Some(ExportPlan {
-            subject: format!("{} archives", theme::format_count(targets.len())),
+            subject: format!("{} search results", theme::format_count(targets.len())),
             out_dir,
             targets,
+            preview,
             single: false,
+            format: self.export_format,
         });
     }
 
@@ -548,11 +749,12 @@ impl AgeViewerApp {
     }
 
     fn run_export(&mut self, plan: ExportPlan) {
-        let options = gltf::ExportOptions {
+        let options = ExportOptions {
+            format: plan.format,
             // A batch reloads every archive with all meshes visible, so the
             // visible-only filter can only mean anything for the open archive.
             only_visible: plan.single && self.export_only_visible,
-            write_textures: true,
+            write_textures: self.export_write_textures,
         };
 
         if plan.single {
@@ -564,21 +766,31 @@ impl AgeViewerApp {
                 .archive_path
                 .as_deref()
                 .map(batch::archive_stem)
-                .unwrap_or_else(|| gltf::sanitize(&scene.archive_name, "model"));
-            match gltf::export_scene(scene, &plan.out_dir, &name, options) {
+                .unwrap_or_else(|| {
+                    std::path::Path::new(&scene.archive_name)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "model".to_string())
+                });
+            // Package folder named after the original archive stem.
+            let package_dir = export_fmt::package_dir_from_name(&plan.out_dir, &scene.archive_name);
+            match export_fmt::export_scene(scene, &package_dir, &name, options) {
                 Ok(summary) => {
                     self.status = Status::ok(format!(
-                        "Exported {} meshes, {} vertices to {}",
+                        "Exported {} ({}) — {} meshes, {} vertices → {}",
+                        scene.archive_name,
+                        plan.format.short_label(),
                         theme::format_count(summary.mesh_count),
                         theme::format_count(summary.vertex_count),
-                        summary.gltf_path.display()
+                        summary.primary_path.display()
                     ));
                 }
                 Err(error) => {
                     let message = format!(
                         "Export failed for {} into {}: {error}",
                         scene.archive_name,
-                        plan.out_dir.display()
+                        package_dir.display()
                     );
                     self.status = Status::error(message.clone());
                     self.modal_error = Some(message);
@@ -596,8 +808,9 @@ impl AgeViewerApp {
             LAYOUT,
         ));
         self.status = Status::info(format!(
-            "Exporting {} archives to {}",
+            "Exporting {} archives as {} to {}",
             theme::format_count(total),
+            plan.format.short_label(),
             plan.out_dir.display()
         ));
     }
@@ -716,11 +929,21 @@ impl AgeViewerApp {
                 if ui
                     .add_enabled(
                         self.results.len() > 0 && !busy,
-                        egui::Button::new("Export results..."),
+                        egui::Button::new("Export search results..."),
                     )
                     .clicked()
                 {
                     self.export_results_dialog();
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(
+                        !self.records.is_empty() && !busy,
+                        egui::Button::new("Export all indexed..."),
+                    )
+                    .clicked()
+                {
+                    self.export_all_dialog();
                     ui.close();
                 }
                 if ui
@@ -792,10 +1015,8 @@ impl AgeViewerApp {
                         }
                         ui.add(
                             egui::ProgressBar::new(job.fraction())
-                                .desired_width(150.0)
-                                .corner_radius(theme::RADIUS_CONTROL)
-                                .fill(theme::ACCENT)
-                                .text(theme::mono_strong(job.progress_label())),
+                                .desired_width(160.0)
+                                .text(job.progress_label()),
                         );
                         return;
                     }
@@ -906,14 +1127,25 @@ impl AgeViewerApp {
             }
         });
 
-        self.results
-            .refresh(&self.records, &self.filter, self.records_revision);
+        let results_changed =
+            self.results
+                .refresh(&self.records, &self.filter, self.records_revision);
+        if results_changed {
+            self.prune_list_selection();
+        }
 
         ui.add_space(6.0);
-        ui.label(theme::mono_strong(search::match_summary(
-            self.results.len(),
-            self.records.len(),
-        )));
+        let summary = if self.list_selection.is_empty() {
+            search::match_summary(self.results.len(), self.records.len())
+        } else {
+            format!(
+                "{} · {} selected",
+                search::match_summary(self.results.len(), self.records.len()),
+                theme::format_count(self.list_selection.len())
+            )
+        };
+        ui.label(theme::mono_strong(summary));
+        ui.label(theme::caption("Shift+click range · right-click menu"));
         ui.add_space(4.0);
 
         if self.records.is_empty() {
@@ -929,24 +1161,113 @@ impl AgeViewerApp {
             return;
         }
 
-        let mut clicked = None;
+        let mut cmd: Option<ListCommand> = None;
+        let busy = self.batch.is_some();
+        let shift_held = ui.input(|i| i.modifiers.shift);
+
+        // Take selection out so the scroll closure can update it on right-click
+        // before the context menu is built (same frame).
+        let mut selection = std::mem::take(&mut self.list_selection);
+        let mut anchor = self.list_anchor.take();
+        let matches = self.results.matches().to_vec();
+
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show_rows(ui, search::ROW_HEIGHT, self.results.len(), |ui, range| {
+            .show_rows(ui, search::ROW_HEIGHT, matches.len(), |ui, range| {
                 for row_index in range {
-                    let Some(&record_index) = self.results.matches().get(row_index) else {
+                    let Some(&record_index) = matches.get(row_index) else {
                         continue;
                     };
                     let Some(record) = self.records.get(record_index) else {
                         continue;
                     };
-                    let selected = self.selected_record == Some(record_index);
+                    let selected = selection.contains(&record_index);
                     let response = search::row(ui, record, row_index, selected);
+
                     if response.clicked() {
-                        clicked = Some(record_index);
+                        cmd = Some(ListCommand::Click {
+                            record_index,
+                            shift: shift_held,
+                        });
                     }
+
+                    // Right-click on an unselected row makes it the sole selection.
+                    if response.secondary_clicked() {
+                        if !selection.contains(&record_index) {
+                            selection.clear();
+                            selection.insert(record_index);
+                            anchor = Some(record_index);
+                        }
+                    }
+
+                    let export_indices: Vec<usize> = if selection.is_empty() {
+                        vec![record_index]
+                    } else {
+                        let mut ids: Vec<usize> = selection.iter().copied().collect();
+                        ids.sort_unstable();
+                        ids
+                    };
+                    let n = export_indices.len();
+                    let gltf_label = if n == 1 {
+                        "Export as glTF…".to_string()
+                    } else {
+                        format!("Export {} as glTF…", theme::format_count(n))
+                    };
+                    let obj_label = if n == 1 {
+                        "Export as OBJ…".to_string()
+                    } else {
+                        format!("Export {} as OBJ…", theme::format_count(n))
+                    };
+
+                    response.context_menu(|ui| {
+                        ui.set_min_width(200.0);
+                        if ui
+                            .add_enabled(!busy, egui::Button::new(gltf_label))
+                            .clicked()
+                        {
+                            cmd = Some(ListCommand::Export {
+                                record_indices: export_indices.clone(),
+                                format: ExportFormat::Gltf,
+                            });
+                            ui.close();
+                        }
+                        if ui
+                            .add_enabled(!busy, egui::Button::new(obj_label))
+                            .clicked()
+                        {
+                            cmd = Some(ListCommand::Export {
+                                record_indices: export_indices.clone(),
+                                format: ExportFormat::Obj,
+                            });
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Open").clicked() {
+                            cmd = Some(ListCommand::Open { record_index });
+                            ui.close();
+                        }
+                        if ui.button("Open containing folder").clicked() {
+                            cmd = Some(ListCommand::RevealInFolder { record_index });
+                            ui.close();
+                        }
+                        if ui.button("Select all matches").clicked() {
+                            cmd = Some(ListCommand::SelectAllMatches);
+                            ui.close();
+                        }
+                        if ui
+                            .add_enabled(
+                                !selection.is_empty(),
+                                egui::Button::new("Clear selection"),
+                            )
+                            .clicked()
+                        {
+                            cmd = Some(ListCommand::ClearSelection);
+                            ui.close();
+                        }
+                    });
+
                     response.on_hover_text(format!(
-                        "{}\n{} members, {} models, {} textures, {}",
+                        "{}\n{} members, {} models, {} textures, {}\nShift+click to multi-select · right-click to export",
                         record.relative,
                         theme::format_count(record.member_count),
                         theme::format_count(record.prm_count),
@@ -956,8 +1277,11 @@ impl AgeViewerApp {
                 }
             });
 
-        if let Some(index) = clicked {
-            self.select_record(index);
+        self.list_selection = selection;
+        self.list_anchor = anchor;
+
+        if let Some(cmd) = cmd {
+            self.apply_list_command(cmd);
         }
     }
 
@@ -1149,57 +1473,187 @@ impl AgeViewerApp {
         }
     }
 
+    fn export_all_dialog(&mut self) {
+        let targets: Vec<batch::Target> = self
+            .records
+            .iter()
+            .map(|record| batch::Target {
+                path: record.path.clone(),
+                relative: record.relative.clone(),
+            })
+            .collect();
+        if targets.is_empty() {
+            self.status = Status::warn("No indexed archives to export.".to_string());
+            return;
+        }
+        let Some(out_dir) = self.pick_export_dir() else {
+            return;
+        };
+        let preview = preview_rows_for_targets(&out_dir, &targets);
+        self.pending_export = Some(ExportPlan {
+            subject: format!("{} archives (all indexed)", theme::format_count(targets.len())),
+            out_dir,
+            targets,
+            preview,
+            single: false,
+            format: self.export_format,
+        });
+    }
+
     fn export_modal(&mut self, ctx: &egui::Context) {
-        let Some(plan) = self.pending_export.take() else {
+        let Some(mut plan) = self.pending_export.take() else {
             return;
         };
         let mut decision: Option<bool> = None;
 
-        let modal = egui::Modal::new(egui::Id::new("age_export_confirm")).show(ctx, |ui| {
-            ui.set_min_width(460.0);
-            ui.label(theme::section(if plan.single {
-                "Export archive"
-            } else {
-                "Export search results"
-            }));
-            ui.add_space(6.0);
+        // Keep modal format selection in sync with the plan.
+        plan.format = self.export_format;
 
-            if plan.single {
-                ui.label(theme::label("Writes one glTF, its buffer and its textures."));
+        let count = plan.preview.len().max(if plan.single { 1 } else { plan.targets.len() });
+        let title = if plan.single {
+            "Confirm export — 1 archive".to_string()
+        } else {
+            format!(
+                "Confirm export — {} archives",
+                theme::format_count(count)
+            )
+        };
+
+        let modal = egui::Modal::new(egui::Id::new("age_export_confirm")).show(ctx, |ui| {
+            ui.set_min_width(640.0);
+            ui.set_max_width(720.0);
+            ui.heading(title);
+            ui.add_space(4.0);
+
+            ui.label(theme::mono_strong(format!(
+                "Will export {} item{}",
+                theme::format_count(count),
+                if count == 1 { "" } else { "s" }
+            )));
+            ui.label(if plan.single {
+                "One package folder named after the archive stem."
             } else {
-                ui.label(theme::label(
-                    "Writes one subfolder per archive, each with a glTF, its buffer and its textures.",
-                ));
-            }
+                "One package folder per archive, preserving the original relative path."
+            });
+
             ui.add_space(6.0);
-            widgets::field(ui, "Archives", &plan.subject);
-            widgets::field(ui, "Destination", &plan.out_dir.display().to_string());
+            egui::Grid::new("export_plan_summary")
+                .num_columns(2)
+                .spacing([12.0, 4.0])
+                .striped(true)
+                .show(ui, |ui| {
+                    widgets::property(ui, "Count", &theme::format_count(count));
+                    widgets::property(ui, "Scope", &plan.subject);
+                    widgets::property(ui, "Output root", &plan.out_dir.display().to_string());
+                    widgets::property(ui, "Format", self.export_format.short_label());
+                    widgets::property(
+                        ui,
+                        "Textures",
+                        if self.export_write_textures {
+                            "yes (textures/*.png)"
+                        } else {
+                            "no"
+                        },
+                    );
+                    if !plan.single {
+                        widgets::property(ui, "Report", batch::REPORT_FILE_NAME);
+                    }
+                });
+
+            ui.add_space(8.0);
+            ui.label(theme::section("Export list"));
             ui.label(theme::caption(
-                "Files with the same names in the destination are overwritten.",
+                "Source archive  →  package folder under the output root",
             ));
-            if !plan.single {
-                ui.label(theme::caption(format!(
-                    "A JSON report is written as {}.",
-                    batch::REPORT_FILE_NAME
-                )));
+            ui.add_space(2.0);
+
+            let list_height = (count as f32 * 18.0).clamp(72.0, 280.0);
+            let row_h = 18.0;
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                // Header
+                ui.horizontal(|ui| {
+                    ui.set_min_width(ui.available_width());
+                    let half = (ui.available_width() - 24.0) * 0.5;
+                    ui.add(
+                        egui::Label::new(theme::caption("Source"))
+                            .truncate(),
+                    );
+                    ui.add_space((half - 40.0).max(0.0));
+                    ui.label(theme::caption("Package folder"));
+                });
+                ui.separator();
+
+                let preview = plan.preview.clone();
+                egui::ScrollArea::vertical()
+                    .max_height(list_height)
+                    .auto_shrink([false, false])
+                    .show_rows(ui, row_h, preview.len(), |ui, range| {
+                        for i in range {
+                            let Some(row) = preview.get(i) else {
+                                continue;
+                            };
+                            ui.horizontal(|ui| {
+                                let width = ui.available_width();
+                                let col = ((width - 20.0) * 0.45).max(80.0);
+                                ui.add(
+                                    egui::Label::new(theme::mono(&row.source))
+                                        .truncate(),
+                                )
+                                .on_hover_text(&row.source);
+                                ui.add_space(4.0);
+                                ui.label(theme::caption("→"));
+                                ui.add_space(4.0);
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2((width - col).max(80.0), row_h),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.add(
+                                            egui::Label::new(theme::mono(&row.package_dir))
+                                                .truncate(),
+                                        )
+                                        .on_hover_text(&row.package_dir);
+                                    },
+                                );
+                            });
+                        }
+                    });
+            });
+
+            if count > 12 {
+                ui.label(theme::caption("Scroll the list to review every item."));
             }
 
             ui.add_space(8.0);
+            ui.label(theme::section("Options"));
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut self.export_format, ExportFormat::Gltf, "glTF 2.0");
+                ui.radio_value(&mut self.export_format, ExportFormat::Obj, "OBJ + MTL");
+            });
+            ui.label(theme::caption(self.export_format.label()));
+            ui.checkbox(
+                &mut self.export_write_textures,
+                "Include textures (PNG under textures/)",
+            );
             if plan.single {
                 ui.checkbox(&mut self.export_only_visible, "Only visible meshes");
             } else {
                 ui.label(theme::caption(
-                    "Every mesh of every archive is exported; mesh visibility applies to the open archive only.",
+                    "Batch exports every mesh; visibility applies only to the open archive.",
                 ));
             }
+            ui.label(theme::caption(
+                "Existing files in the destination package folders are overwritten.",
+            ));
 
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                let export = egui::Button::new(
-                    egui::RichText::new("Export").color(theme::BG_BASE),
-                )
-                .fill(theme::ACCENT);
-                if ui.add(export).clicked() {
+                let confirm = format!(
+                    "Export {} item{}",
+                    theme::format_count(count),
+                    if count == 1 { "" } else { "s" }
+                );
+                if ui.button(confirm).clicked() {
                     decision = Some(true);
                 }
                 if ui.button("Cancel").clicked() {
@@ -1208,6 +1662,7 @@ impl AgeViewerApp {
             });
         });
 
+        plan.format = self.export_format;
         match decision {
             Some(true) => self.run_export(plan),
             Some(false) => {}
@@ -1222,11 +1677,7 @@ impl AgeViewerApp {
         };
         let modal = egui::Modal::new(egui::Id::new("age_error_modal")).show(ctx, |ui| {
             ui.set_min_width(460.0);
-            ui.label(
-                egui::RichText::new("Something did not work")
-                    .color(theme::STATUS_ERROR)
-                    .strong(),
-            );
+            ui.colored_label(theme::STATUS_ERROR, "Error");
             ui.add_space(6.0);
             egui::ScrollArea::vertical()
                 .max_height(300.0)
@@ -1284,11 +1735,7 @@ impl AgeViewerApp {
                 if checker {
                     widgets::paint_checkerboard(painter, rect, 12.0);
                 } else {
-                    painter.rect_filled(
-                        rect,
-                        egui::CornerRadius::same(theme::RADIUS_CONTROL),
-                        theme::BG_SUNKEN,
-                    );
+                    painter.rect_filled(rect, 0.0, theme::BG_SUNKEN);
                 }
                 if let Some(handle) = &handle {
                     painter.image(
@@ -1418,6 +1865,76 @@ fn default_camera(scene: Option<&GpuScene>) -> PreviewCamera {
         // Display-space bounds and focus target, so off-centre maps frame right.
         Some(gpu) => PreviewCamera::frame_bounds_with_target(gpu.bounds(), gpu.focus_target()),
         None => PreviewCamera::frame_bounds(PreviewBounds::new([-1.0; 3], [1.0; 3])),
+    }
+}
+
+/// Build confirmation rows: source relative path → resolved package directory.
+fn preview_rows_for_targets(out_dir: &PathBuf, targets: &[batch::Target]) -> Vec<ExportPreviewRow> {
+    let mut taken = HashSet::new();
+    targets
+        .iter()
+        .map(|target| {
+            let package = export_fmt::package_dir(out_dir, &target.relative, &mut taken);
+            ExportPreviewRow {
+                source: target.relative.clone(),
+                package_dir: package.display().to_string(),
+            }
+        })
+        .collect()
+}
+
+/// Reveal `path` in the platform file manager.
+///
+/// On Windows this selects the file in Explorer (`explorer /select,"…"`).
+/// On macOS it uses `open -R`. Elsewhere it opens the parent directory.
+fn reveal_in_file_manager(path: &std::path::Path) -> Result<(), String> {
+    if !path.exists() {
+        return Err(format!("path does not exist: {}", path.display()));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // One unescaped argument so Explorer sees: /select,"C:\path\file.xc"
+        // (Rust's default argv quoting would nest quotes and break /select).
+        let select_arg = format!("/select,\"{}\"", path.display());
+        std::process::Command::new("explorer")
+            .raw_arg(select_arg)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        // explorer.exe often exits non-zero even when it opens correctly.
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .status()
+            .map_err(|e| e.to_string())?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(format!("open -R exited with {status}"));
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let folder = if path.is_dir() {
+            path
+        } else {
+            path.parent()
+                .ok_or_else(|| format!("no parent folder for {}", path.display()))?
+        };
+        let status = std::process::Command::new("xdg-open")
+            .arg(folder)
+            .status()
+            .map_err(|e| e.to_string())?;
+        if status.success() {
+            return Ok(());
+        }
+        Err(format!("xdg-open exited with {status}"))
     }
 }
 

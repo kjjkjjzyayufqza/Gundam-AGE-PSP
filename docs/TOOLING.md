@@ -1,9 +1,23 @@
 # Tooling
 
-Date: 2026-06-09
+Date: 2026-07-28
 
-Core reusable Python tools are flat in `tools/`. Normal users should start with
-`tools/age_start.py`.
+The repository root is the Rust `age_viewer` crate (desktop GUI + format
+library). Core reusable Python tools are flat in `tools/`. Normal users of the
+Python pipeline should start with `tools/age_start.py`.
+
+## Desktop GUI: `age_viewer`
+
+| Item | Purpose |
+|---|---|
+| `cargo run --release` | Browse resource tree, preview meshes/textures, export glTF or OBJ |
+| `src/gltf.rs`, `src/obj.rs` | Static package writers (textures under `textures/`) |
+| `src/export_fmt.rs` | Format selection + package folders named from original paths |
+| `src/gui/batch.rs` | Background multi-archive export + JSON report |
+| `capture_ui.ps1` | Capture the viewer window to `docs/screenshots/` |
+| `docs/screenshots/` | Screenshots embedded in README |
+
+See the [GUI Viewer section in README](../README.md#gui-viewer-age_viewer).
 
 ## Entry Point
 
