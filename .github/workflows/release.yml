@@ -1,7 +1,9 @@
 # Build age_viewer in release mode and publish artifacts.
 #
-# - push to master/main or PR: compile + unit tests + upload build artifact
-# - tag v* or manual "Release" dispatch: also create a GitHub Release with the binary
+# - PR: compile + unit tests + upload build artifact only
+# - push to master/main: also publish/update the rolling "latest" GitHub Release
+# - tag v*: create a versioned GitHub Release with the binary
+# - workflow_dispatch + create_release: publish (versioned if on a v* tag, else "latest")
 
 name: Release
 
@@ -14,9 +16,9 @@ on:
   workflow_dispatch:
     inputs:
       create_release:
-        description: "Create a GitHub Release from this run (uses run id as draft tag if not on a v* tag)"
+        description: "Create or update a GitHub Release from this run"
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write
@@ -81,8 +83,12 @@ jobs:
     name: Publish GitHub Release
     needs: build-windows
     runs-on: ubuntu-latest
+    # Skip only on pull_request. Everything else that builds successfully publishes.
+    # - refs/tags/v*  -> versioned release
+    # - master/main / dispatch -> rolling "latest" prerelease (overwritten each run)
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')) ||
       (github.event_name == 'workflow_dispatch' && inputs.create_release)
     steps:
       - name: Download Windows artifact
@@ -97,11 +103,13 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # On workflow_dispatch without a tag, softprops needs a tag_name.
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('build-{0}', github.run_number) }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('Build {0}', github.run_number) }}
-          draft: ${{ github.event_name == 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/') }}
+          # Version tags keep their name; branch/dispatch runs reuse rolling "latest".
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'latest' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'Latest' }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          make_latest: ${{ startsWith(github.ref, 'refs/tags/v') }}
           generate_release_notes: true
           files: release-assets/age_viewer-windows-x64.zip
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
