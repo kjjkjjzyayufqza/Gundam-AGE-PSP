@@ -1,9 +1,9 @@
 # Build age_viewer in release mode and publish artifacts.
 #
-# - PR: compile + unit tests + upload build artifact only
-# - push to master/main: also publish/update the rolling "latest" GitHub Release
-# - tag v*: create a versioned GitHub Release with the binary
-# - workflow_dispatch + create_release: publish (versioned if on a v* tag, else "latest")
+# - PR / push to master/main: compile + tests + upload build artifact
+# - tag v*: create a named GitHub Release (e.g. "age_viewer v0.1.0 — Windows x64")
+# - workflow_dispatch + create_release: same as a versioned release when on a v* tag;
+#   otherwise publishes a named Nightly prerelease
 
 name: Release
 
@@ -83,12 +83,10 @@ jobs:
     name: Publish GitHub Release
     needs: build-windows
     runs-on: ubuntu-latest
-    # Skip only on pull_request. Everything else that builds successfully publishes.
-    # - refs/tags/v*  -> versioned release
-    # - master/main / dispatch -> rolling "latest" prerelease (overwritten each run)
+    # Named Releases only for version tags or explicit dispatch — not every branch push.
+    # (Branch pushes still upload Actions artifacts from build-windows.)
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')) ||
       (github.event_name == 'workflow_dispatch' && inputs.create_release)
     steps:
       - name: Download Windows artifact
@@ -103,9 +101,27 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Version tags keep their name; branch/dispatch runs reuse rolling "latest".
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'latest' }}
-          name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'Latest' }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/v') && format('age_viewer {0} — Windows x64', github.ref_name) || 'age_viewer Nightly — Windows x64' }}
+          body: |
+            ## ${{ startsWith(github.ref, 'refs/tags/v') && format('age_viewer {0}', github.ref_name) || 'age_viewer Nightly' }}
+
+            Windows x64 build of **age_viewer** for Gundam AGE PSP Level-5 resources.
+
+            ### Download
+            - **age_viewer-windows-x64.zip** — unpack and run `age_viewer.exe`
+
+            ### Features
+            - Browse an already-unpacked PSP resource tree
+            - Preview meshes and textures
+            - Export glTF / OBJ packages (with textures)
+            - Batch export
+
+            ### Requirements
+            - Windows x64
+            - Local **unpacked** PSP resource tree (no game data is bundled)
+
+            Commit: `${{ github.sha }}`
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           make_latest: ${{ startsWith(github.ref, 'refs/tags/v') }}
           generate_release_notes: true
